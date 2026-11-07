@@ -23,3 +23,41 @@
 @supports(padding:max(0px)){.pv-footer{padding-bottom:max(10px,env(safe-area-inset-bottom))}}
 @media(prefers-reduced-motion:reduce){.pensieve *{transition:none!important;animation:none!important}}
 @media(max-width:600px){.pv-tabs{flex-wrap:wrap;overflow:visible}.pv-content{max-height:calc(100dvh - 275px)}}
+
+/* Native extensions drawer: scoped independently of the archive dialogs. */
+#pensieve-settings.pensieve-settings {
+    width:100%;max-width:100%;min-width:0;box-sizing:border-box;
+    align-self:stretch;flex:0 0 auto;color:#F0E8DC;
+}
+#pensieve-settings *,#pensieve-settings > .inline-drawer {
+    box-sizing:border-box;min-width:0;
+}
+#pensieve-settings > .inline-drawer {width:100%;max-width:100%}
+#pensieve-settings .inline-drawer-toggle.inline-drawer-header.pv-settings-header {
+    width:100%;max-width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;
+    background:#14243D;border:1px solid #B79C73;border-radius:10px;
+    padding:2px 5px;margin-bottom:5px;color:#F0E8DC;
+}
+#pensieve-settings .pv-settings-title {
+    display:flex;align-items:center;gap:8px;flex:1 1 auto;white-space:nowrap;
+    word-break:normal;overflow-wrap:normal;line-height:1.5;
+}
+#pensieve-settings .pv-settings-title i,
+#pensieve-settings .inline-drawer-icon {color:#B79C73;flex:0 0 auto}
+#pensieve-settings .inline-drawer-icon {margin-left:auto;filter:none}
+#pensieve-settings .pv-settings-content {
+    width:100%;max-width:100%;background:#14243D;border:1px solid #B79C7377;
+    border-radius:10px;padding:10px;margin-bottom:5px;
+}
+#pensieve-settings .pv-settings-actions {display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%}
+#pensieve-settings .pv-settings-action {
+    display:flex;align-items:center;gap:10px;width:100%;max-width:100%;min-height:40px;
+    padding:8px 12px;margin:0;background:#263F60;color:#F0E8DC;border:1px solid #B79C7366;
+    border-radius:7px;font:inherit;line-height:1.4;text-align:left;cursor:pointer;
+    white-space:normal;word-break:normal;overflow-wrap:normal;hyphens:none;
+}
+#pensieve-settings .pv-settings-action i {flex:0 0 18px;text-align:center;color:#B79C73}
+#pensieve-settings .pv-settings-action span {flex:1 1 auto}
+#pensieve-settings .pv-settings-action:hover {border-color:#B79C73;background:#2e4b70}
+#pensieve-settings .pv-settings-header:focus-visible,
+#pensieve-settings .pv-settings-action:focus-visible {outline:2px solid #B79C73;outline-offset:2px}

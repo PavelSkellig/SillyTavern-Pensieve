@@ -39,7 +39,7 @@ try {
    live.extensionSettings.pensieve.prompts.arc.presets[0].text='Промпт арки: {{user}}. Объедини выбранное.';
    await live.eventSource.emit(live.eventTypes.CHAT_CHANGED,live.chatId);return avatar;
  });
- await page.locator('#pensieve-open').evaluate(n=>n.click());await page.waitForSelector('#pensieve-panel[open]');
+ await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await page.waitForSelector('#pensieve-panel[open]');
  const panel=page.locator('#pensieve-panel');
  await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('50');
  await panel.getByRole('button',{name:'Создать сводку',exact:true}).last().click();

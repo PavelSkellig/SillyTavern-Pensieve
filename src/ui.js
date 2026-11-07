@@ -15,9 +15,7 @@ export class UI {
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
         this.panel.querySelector('[data-action="close"]').onclick=()=>this.panel.close();
         this.panel.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>this.go(b.dataset.tab));
-        const launcher=el('div',{class:'inline-drawer'});
-        const open=button('Омут памяти · открыть архив',()=>this.open());open.classList.add('menu_button');open.id='pensieve-open';launcher.append(open);
-        (document.querySelector('#extensions_settings2')??document.querySelector('#extensions_settings')??document.body).append(launcher);
+        this.mountSettingsDrawer();
         const menu=document.querySelector('#extensionsMenu');if(menu){const b=button('Омут памяти',()=>this.open());b.classList.add('list-group-item');menu.append(b);}
         document.addEventListener('click',event=>{
             const action=event.target.closest('[data-pensieve-edge]');if(!action)return;
@@ -35,6 +33,43 @@ export class UI {
         for(const name of ['MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_SENT','MESSAGE_RECEIVED','MORE_MESSAGES_LOADED','USER_MESSAGE_RENDERED','CHARACTER_MESSAGE_RENDERED'])if(c.eventTypes[name])c.eventSource.on(c.eventTypes[name],()=>this.schedule());
         const chat=document.querySelector('#chat');if(chat)new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes].some(n=>n.nodeType===1&&(n.matches?.('.mes')||n.querySelector?.('.mes')))))this.schedule();}).observe(chat,{childList:true,subtree:true});
         await this.refresh();
+    }
+    mountSettingsDrawer() {
+        const container=document.getElementById('extensions_settings2')??document.getElementById('extensions_settings');
+        if(!container)throw Error('Не удалось найти панель настроек расширений SillyTavern.');
+        // A dedicated outer wrapper keeps this drawer a full-width sibling of other extensions.
+        const root=el('div',{id:'pensieve-settings',class:'pensieve-settings'});
+        const drawer=el('div',{class:'inline-drawer'});
+        const header=el('div',{
+            id:'pensieve-settings-toggle',class:'inline-drawer-toggle inline-drawer-header pv-settings-header',
+            role:'button',tabindex:0,'aria-expanded':'false','aria-controls':'pensieve-settings-content',
+        });
+        const title=el('b',{class:'pv-settings-title'});
+        title.append(el('i',{class:'fa-solid fa-book-open','aria-hidden':'true'}),el('span',{},'Омут памяти'));
+        const icon=el('div',{class:'inline-drawer-icon fa-solid fa-circle-chevron-down down','aria-hidden':'true'});
+        header.append(title,icon);
+        const content=el('div',{id:'pensieve-settings-content',class:'inline-drawer-content pv-settings-content'});
+        const actions=el('div',{class:'pv-settings-actions'});
+        const items=[
+            ['pensieve-settings-summary','Создать сводку','fa-scroll',()=>this.open('home')],
+            ['pensieve-settings-arc','Создать арку','fa-book-open',()=>{this.archiveTab='summary';this.open('archive');}],
+            ['pensieve-open','Архив воспоминаний','fa-book-bookmark',()=>this.open('archive')],
+            ['pensieve-settings-memory','Активная память','fa-eye',()=>this.open('memory')],
+            ['pensieve-settings-prompts','Промпты','fa-feather',()=>this.open('prompts')],
+            ['pensieve-settings-options','Настройки','fa-gear',()=>this.open('settings')],
+        ];
+        for(const [id,label,glyph,action]of items) {
+            const control=button('',action);control.id=id;control.className='pv-settings-action';
+            control.append(el('i',{class:`fa-solid ${glyph}`,'aria-hidden':'true'}),el('span',{},label));
+            actions.append(control);
+        }
+        content.append(actions);drawer.append(header,content);root.append(drawer);container.append(root);
+        // SillyTavern owns click handling, animation and chevron state; only mirror it for accessibility.
+        const syncExpanded=()=>header.setAttribute('aria-expanded',String(icon.classList.contains('up')));
+        new MutationObserver(syncExpanded).observe(icon,{attributes:true,attributeFilter:['class']});
+        header.addEventListener('keydown',event=>{
+            if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();header.click();}
+        });
     }
     schedule(render=false) {clearTimeout(this.timer);this.timer=setTimeout(()=>this.refresh(render).catch(error=>console.warn('[Pensieve]',error.message)),100);}
     showNotice(text) {const n=this.panel.querySelector('.pv-notice');n.hidden=!text;n.textContent=text;}
