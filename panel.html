@@ -1,0 +1,16 @@
+<dialog id="pensieve-panel" class="pensieve" aria-labelledby="pensieve-title">
+  <header class="pv-header">
+    <div><h2 id="pensieve-title"><i class="fa-solid fa-book-open" aria-hidden="true"></i> Омут памяти</h2><p>Архив воспоминаний</p></div>
+    <button type="button" data-action="close" class="pv-icon" title="Закрыть" aria-label="Закрыть">×</button>
+  </header>
+  <nav class="pv-tabs" aria-label="Разделы архива">
+    <button type="button" data-tab="home">Главная</button>
+    <button type="button" data-tab="archive">Архив</button>
+    <button type="button" data-tab="memory">Активная память</button>
+    <button type="button" data-tab="prompts">Промпты</button>
+    <button type="button" data-tab="settings">Настройки</button>
+  </nav>
+  <div class="pv-notice" role="status" aria-live="polite" hidden></div>
+  <main class="pv-content"></main>
+  <footer class="pv-footer"><span class="pv-chat-name"></span><span>Ручное создание · бережное хранение</span></footer>
+</dialog>

@@ -1,0 +1,14 @@
+{
+  "display_name": "Омут памяти / Pensieve",
+  "loading_order": 110,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "PavelSkellig",
+  "version": "1.0.0",
+  "homePage": "https://github.com/PavelSkellig/SillyTavern-Pensieve",
+  "minimum_client_version": "1.19.0",
+  "generate_interceptor": "pensieveGenerationInterceptor",
+  "auto_update": false
+}

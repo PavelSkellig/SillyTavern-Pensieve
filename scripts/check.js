@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+const manifest=JSON.parse(fs.readFileSync('manifest.json','utf8'));
+const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
+if(pkg.version!==manifest.version)throw Error('Package and manifest versions differ');
+for(const file of [manifest.js,manifest.css,'panel.html','README.md','LICENSE'])if(!fs.existsSync(file))throw Error(`Missing ${file}`);
+const files=['index.js',...fs.readdirSync('src').filter(f=>f.endsWith('.js')).map(f=>path.join('src',f))];
+for(const file of files)execFileSync(process.execPath,['--check',file],{stdio:'inherit'});
+console.log(`Checked ${files.length} JavaScript modules; install manifest and required files are present.`);
