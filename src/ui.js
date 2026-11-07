@@ -14,14 +14,21 @@ export class UI {
         const template=el('template');template.innerHTML=html;document.body.append(template.content);
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
         this.panel.querySelector('[data-action="close"]').onclick=()=>this.panel.close();
+        // Keep ST's document-wide drawer handlers out of this native modal's click path.
+        this.panel.addEventListener('click',event=>event.stopPropagation());
+        this.panel.addEventListener('close',()=>{
+            const target=this.returnFocus;
+            if(target?.isConnected&&target.getClientRects().length)target.focus({preventScroll:true});
+            else document.querySelector('#send_textarea')?.focus({preventScroll:true});
+        });
         this.panel.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>this.go(b.dataset.tab));
-        this.mountSettingsDrawer();
-        const menu=document.querySelector('#extensionsMenu');if(menu){const b=button('Омут памяти',()=>this.open());b.classList.add('list-group-item');menu.append(b);}
+        await this.mountSettingsDrawer();
+        const menu=document.querySelector('#extensionsMenu');if(menu){const b=button('Омут памяти',event=>{this.returnFocus=event.currentTarget;this.open();});b.classList.add('list-group-item');menu.append(b);}
         document.addEventListener('click',event=>{
             const action=event.target.closest('[data-pensieve-edge]');if(!action)return;
             const id=Number(action.closest('.mes')?.getAttribute('mesid'));if(!Number.isInteger(id))return;
             if(action.dataset.pensieveEdge==='start')this.start=id;else this.end=id;
-            this.open('home');this.decorateMessages();
+            this.returnFocus=action;this.open('home');this.decorateMessages();
         });
         const c=this.e.host.context();
         c.eventSource.on(c.eventTypes.CHAT_CHANGED,()=>{
@@ -34,15 +41,16 @@ export class UI {
         const chat=document.querySelector('#chat');if(chat)new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes].some(n=>n.nodeType===1&&(n.matches?.('.mes')||n.querySelector?.('.mes')))))this.schedule();}).observe(chat,{childList:true,subtree:true});
         await this.refresh();
     }
-    mountSettingsDrawer() {
+    async mountSettingsDrawer() {
+        const {toggleDrawer}=await import('/scripts/utils.js');
         const container=document.getElementById('extensions_settings2')??document.getElementById('extensions_settings');
         if(!container)throw Error('Не удалось найти панель настроек расширений SillyTavern.');
         // A dedicated outer wrapper keeps this drawer a full-width sibling of other extensions.
         const root=el('div',{id:'pensieve-settings',class:'pensieve-settings'});
         const drawer=el('div',{class:'inline-drawer'});
-        const header=el('div',{
+        const header=el('button',{
             id:'pensieve-settings-toggle',class:'inline-drawer-toggle inline-drawer-header pv-settings-header',
-            role:'button',tabindex:0,'aria-expanded':'false','aria-controls':'pensieve-settings-content',
+            type:'button','aria-expanded':'false','aria-controls':'pensieve-settings-content',
         });
         const title=el('b',{class:'pv-settings-title'});
         title.append(el('i',{class:'fa-solid fa-book-open','aria-hidden':'true'}),el('span',{},'Омут памяти'));
@@ -59,17 +67,30 @@ export class UI {
             ['pensieve-settings-options','Настройки','fa-gear',()=>this.open('settings')],
         ];
         for(const [id,label,glyph,action]of items) {
-            const control=button('',action);control.id=id;control.className='pv-settings-action';
+            const control=button('',event=>{
+                event.stopPropagation();this.returnFocus=event.currentTarget;action();
+            });control.id=id;control.className='pv-settings-action';
             control.append(el('i',{class:`fa-solid ${glyph}`,'aria-hidden':'true'}),el('span',{},label));
             actions.append(control);
         }
         content.append(actions);drawer.append(header,content);root.append(drawer);container.append(root);
-        // SillyTavern owns click handling, animation and chevron state; only mirror it for accessibility.
-        const syncExpanded=()=>header.setAttribute('aria-expanded',String(icon.classList.contains('up')));
-        new MutationObserver(syncExpanded).observe(icon,{attributes:true,attributeFilter:['class']});
-        header.addEventListener('keydown',event=>{
-            if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();header.click();}
+        let restoring=true;
+        drawer.addEventListener('inline-drawer-toggle',()=>{
+            const expanded=icon.classList.contains('up');
+            header.setAttribute('aria-expanded',String(expanded));content.hidden=!expanded;
+            if(restoring)return;
+            const settings=this.e.settings();settings.ui??={};
+            if(settings.ui.drawerExpanded!==expanded){
+                settings.ui.drawerExpanded=expanded;this.e.host.context().saveSettingsDebounced();
+            }
         });
+        // One semantic click (mouse, touch or keyboard) uses ST's native drawer API.
+        // Stop the document delegate so the same click cannot toggle this drawer twice.
+        header.addEventListener('click',event=>{
+            event.preventDefault();event.stopPropagation();
+            toggleDrawer(drawer,header.getAttribute('aria-expanded')!=='true');
+        });
+        toggleDrawer(drawer,this.e.settings().ui?.drawerExpanded===true);restoring=false;
     }
     schedule(render=false) {clearTimeout(this.timer);this.timer=setTimeout(()=>this.refresh(render).catch(error=>console.warn('[Pensieve]',error.message)),100);}
     showNotice(text) {const n=this.panel.querySelector('.pv-notice');n.hidden=!text;n.textContent=text;}

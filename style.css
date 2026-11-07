@@ -36,8 +36,9 @@
 #pensieve-settings .inline-drawer-toggle.inline-drawer-header.pv-settings-header {
     width:100%;max-width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;
     background:#14243D;border:1px solid #B79C73;border-radius:10px;
-    padding:2px 5px;margin-bottom:5px;color:#F0E8DC;
+    padding:2px 5px;margin-bottom:5px;color:#F0E8DC;font:inherit;text-align:left;cursor:pointer;touch-action:manipulation;
 }
+#pensieve-settings [hidden] {display:none!important}
 #pensieve-settings .pv-settings-title {
     display:flex;align-items:center;gap:8px;flex:1 1 auto;white-space:nowrap;
     word-break:normal;overflow-wrap:normal;line-height:1.5;
@@ -58,6 +59,16 @@
 }
 #pensieve-settings .pv-settings-action i {flex:0 0 18px;text-align:center;color:#B79C73}
 #pensieve-settings .pv-settings-action span {flex:1 1 auto}
+#pensieve-settings .pv-settings-action {touch-action:manipulation}
+#pensieve-settings .pv-settings-action > * {pointer-events:none}
+.pensieve .pv-icon {touch-action:manipulation}
+/* Keep the existing main dialog usable when a mobile viewport becomes short. */
+#pensieve-panel[open] {display:flex;flex-direction:column}
+#pensieve-panel > .pv-header,
+#pensieve-panel > .pv-tabs,
+#pensieve-panel > .pv-notice,
+#pensieve-panel > .pv-footer {flex:0 0 auto}
+#pensieve-panel > .pv-content {flex:1 1 auto;min-height:0;max-height:none}
 #pensieve-settings .pv-settings-action:hover {border-color:#B79C73;background:#2e4b70}
 #pensieve-settings .pv-settings-header:focus-visible,
 #pensieve-settings .pv-settings-action:focus-visible {outline:2px solid #B79C73;outline-offset:2px}
