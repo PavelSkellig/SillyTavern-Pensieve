@@ -181,3 +181,75 @@
     .pensieve .pv-home-actions button {font-size:13px;gap:5px}
     .pensieve .pv-home-stats {font-size:11px}
 }
+
+/* 1.3.0: approved memory workspace. All product styles remain scoped. */
+.pensieve{--pv-record:#192d48;--pv-green:#a5cbb7;--pv-green-bg:#1a3934;font-size:14px;line-height:1.5}
+.pensieve[data-theme="light"]{--pv-record:#e7edf3;--pv-green:#2f6048;--pv-green-bg:#dfede4}
+#pensieve-panel{width:min(840px,calc(100vw - 24px))}
+#pensieve-panel > .pv-header{padding:16px 20px;justify-content:flex-start;gap:12px}
+.pensieve .pv-brand{flex:1}
+.pensieve .pv-brand-mark{display:grid;place-items:center;width:34px;height:40px;flex:none;color:var(--pv-bronze);font-size:26px}
+.pensieve .pv-brand h2{font-size:25px;margin:0 0 4px;line-height:1.2}
+.pensieve .pv-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;padding:7px 9px;overflow:visible}
+.pensieve .pv-tabs button{display:flex;align-items:center;justify-content:center;gap:6px;min-height:42px;padding:7px 4px;font-size:12px;line-height:1.3}
+.pensieve .pv-tabs button i{font-size:15px;flex:none}
+.pensieve .pv-tabs button span{overflow-wrap:normal;word-break:normal}
+.pensieve .pv-content{padding:16px 20px}
+.pensieve .pv-memory-overview{padding:12px 14px;border:1px solid var(--pv-line);border-radius:11px;background:var(--pv-panel)}
+.pensieve .pv-memory-overview-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.pensieve .pv-memory-caption{font-size:11px;line-height:1.5;color:var(--pv-muted);margin:0}
+.pensieve .pv-memory-amount{font-size:16px;line-height:1.4;font-weight:600;font-variant-numeric:tabular-nums;margin:3px 0 0}
+.pensieve .pv-connection{font-size:11px;line-height:1.5;padding:3px 7px;border-radius:6px;color:var(--pv-muted);background:var(--pv-bg)}
+.pensieve .pv-connection.pv-connected{color:var(--pv-green);background:var(--pv-green-bg)}
+.pensieve .pv-memory-meter{height:4px;overflow:hidden;background:var(--pv-line);border-radius:3px;margin:0 0 7px}
+.pensieve .pv-memory-meter > span{display:block;height:100%;background:var(--pv-green);border-radius:3px}
+.pensieve .pv-memory-quick{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:10px 0}
+.pensieve .pv-memory-quick button{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;line-height:1.35;padding:8px 7px;min-height:40px}
+.pensieve .pv-memory-quick button i{flex:none;font-size:14px}
+.pensieve .pv-memory-quick button:last-child{color:var(--pv-bronze)}
+.pensieve .pv-memory-limit{display:flex;align-items:center;justify-content:flex-end;gap:10px;font-size:12px;color:var(--pv-muted);margin:7px 0 16px}
+.pensieve .pv-memory-limit input{width:100px;margin:0;padding:6px 8px}
+.pensieve .pv-memory-section{margin-top:20px}
+.pensieve .pv-memory-section-heading{display:flex;align-items:center;gap:7px;margin-bottom:4px}
+.pensieve .pv-memory-section-heading h3{font-size:19px;line-height:1.3;margin:0}
+.pensieve .pv-record-count{font-size:11px;padding:1px 6px;background:var(--pv-panel);border-radius:5px;color:var(--pv-muted)}
+.pensieve .pv-memory-description{font-size:12px;line-height:1.45;color:var(--pv-muted);margin:0 0 10px}
+.pensieve .pv-memory-previews{margin-top:18px}
+.pensieve .pv-record{padding:11px 12px;background:var(--pv-record);border:1px solid var(--pv-line);border-radius:11px;margin:10px 0}
+.pensieve .pv-record[data-memory-state="active"]{border-left:2px solid var(--pv-green)}
+.pensieve .pv-record-top{display:flex;align-items:flex-start;gap:10px}
+.pensieve .pv-record-mark{display:grid;place-items:center;flex:0 0 32px;width:32px;height:34px;border-radius:7px;color:var(--pv-bronze);background:var(--pv-panel);font-size:16px}
+.pensieve .pv-record .pv-entry-main{flex:1}
+.pensieve .pv-record h4{font-size:14px;font-weight:600;line-height:1.4;margin:0;overflow-wrap:anywhere}
+.pensieve .pv-record-subtitle{font-size:12px;line-height:1.4;color:var(--pv-text);margin:2px 0 0;overflow-wrap:anywhere}
+.pensieve .pv-record .pv-entry-meta{font-size:11px;line-height:1.5;margin:4px 0 0}
+.pensieve .pv-record .pv-entry-title{gap:6px}
+.pensieve .pv-record .pv-memory-status,.pensieve .pv-record .pv-selection-status{font-size:11px;border-radius:6px;padding:3px 7px;margin:0;color:var(--pv-muted);background:var(--pv-bg)}
+.pensieve .pv-record .pv-memory-active{color:var(--pv-green);background:var(--pv-green-bg)}
+.pensieve .pv-record .pv-memory-arc{color:var(--pv-bronze);background:var(--pv-panel)}
+.pensieve .pv-record .pv-selection-status{color:var(--pv-text);background:var(--pv-active)}
+.pensieve .pv-record .pv-status-note{font-size:11px;line-height:1.45;margin:5px 0 0;color:var(--pv-muted)}
+.pensieve .pv-record > .pv-entry-actions{display:flex;gap:5px;flex-wrap:wrap;margin:10px 0 0;padding-left:42px}
+.pensieve .pv-record .pv-entry-actions button{font-size:11px;min-height:32px;padding:5px 8px}
+.pensieve .pv-record .pv-entry-actions button:last-child{margin-left:auto}
+.pensieve .pv-record .pv-entry-more{padding-left:42px;margin-top:5px}
+.pensieve .pv-record .pv-entry-more > summary{font-size:11px;min-height:24px;padding:3px 0}
+.pensieve .pv-record-select{display:grid;place-items:center;flex:0 0 26px;width:26px;min-height:34px;margin:0;cursor:pointer}
+.pensieve .pv-record-select input[type="checkbox"]{margin:0;width:18px;height:18px}
+@media(max-width:600px){
+    #pensieve-panel{width:100%;max-width:100%}
+    #pensieve-panel > .pv-header{padding:12px;gap:8px}
+    .pensieve .pv-brand h2{font-size:22px}
+    .pensieve .pv-brand-mark{width:28px;flex-basis:28px;font-size:23px}
+    .pensieve .pv-tabs{padding:6px;gap:1px}
+    .pensieve .pv-tabs button{flex-direction:column;gap:4px;font-size:11.5px;min-height:57px;padding:6px 2px}
+    .pensieve .pv-content{padding:14px 12px}
+    .pensieve .pv-memory-quick{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .pensieve .pv-memory-quick button{min-height:42px}
+    .pensieve .pv-record > .pv-entry-actions{display:grid;grid-template-columns:.85fr .85fr 1.4fr;padding-left:0}
+    .pensieve .pv-record .pv-entry-actions button{min-height:40px;font-size:11px;margin:0!important}
+    .pensieve .pv-record .pv-entry-more{padding-left:0}
+    .pensieve .pv-record .pv-entry-more > summary{min-height:28px}
+}
+@media(max-width:360px){.pensieve .pv-tabs button{font-size:11px}.pensieve .pv-brand-mark{display:none}}
+@media(pointer:coarse){.pensieve .pv-record .pv-entry-actions button{min-height:44px}.pensieve .pv-record-select{min-height:44px;flex-basis:32px}}

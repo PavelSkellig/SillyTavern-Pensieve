@@ -48,7 +48,7 @@ try {
  const ids=()=>panel.locator('.pv-archive-results [data-entry-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.entryId));
  const card=id=>panel.locator(`[data-entry-id="${id}"]`),bar=panel.locator('.pv-arc-selection');
  assert.deepEqual(await ids(),['first','second','third','last']);assert.equal(await bar.count(),0,'no selection toolbar before a selection');
- assert.equal(await card('last').locator('h4').innerText(),'Сводка №7 — Последняя');assert.ok(!(await card('first').innerText()).includes('FIRST_SECRET'));
+ assert.equal(await card('last').locator('h4').innerText(),'Сводка №7');assert.equal(await card('last').locator('.pv-record-subtitle').innerText(),'Последняя');assert.ok(!(await card('first').innerText()).includes('FIRST_SECRET'));
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:`work/screenshots/manager-archive-desktop-${engine}.png`});await page.setViewportSize({width:390,height:844});
  await panel.getByLabel('Поиск воспоминаний').fill('second_secret');await page.waitForTimeout(350);assert.deepEqual(await ids(),['second']);assert.equal(await panel.getByLabel('Поиск воспоминаний').evaluate(n=>n===document.activeElement),true);
  await panel.getByLabel('Поиск воспоминаний').fill('пОсЛеДнЯя');await page.waitForTimeout(350);assert.deepEqual(await ids(),['last']);
