@@ -37,6 +37,7 @@ try {
    window.qaEngine=new Engine(createHost(()=>SillyTavern.getContext(),core,chats));window.qaChat=live.chatId;
    live.extensionSettings.pensieve.prompts.summary.presets[0].text='Промпт сводки: {{char}}. Сохрани события.';
    live.extensionSettings.pensieve.prompts.arc.presets[0].text='Промпт арки: {{user}}. Объедини выбранное.';
+   for(const type of ['summary','arc'])live.extensionSettings.pensieve.prompts[type].selected=live.extensionSettings.pensieve.prompts[type].presets[0].id;
    await live.eventSource.emit(live.eventTypes.CHAT_CHANGED,live.chatId);return avatar;
  });
  await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await page.waitForSelector('#pensieve-panel[open]');

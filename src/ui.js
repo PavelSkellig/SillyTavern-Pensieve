@@ -1,7 +1,7 @@
 import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,parseArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint} from './core.js';
 import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 
-export const UI_VERSION='1.3.0';
+export const UI_VERSION='1.4.0';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -13,23 +13,34 @@ const readFile=accept=>new Promise(resolve=>{const input=el('input',{type:'file'
 async function copy(text){try{await navigator.clipboard.writeText(text);}catch{const t=el('textarea',{},text);document.body.append(t);t.select();const success=document.execCommand('copy');t.remove();if(!success)throw Error('Браузер запретил копирование. Выделите текст и скопируйте вручную.');}}
 
 export class UI {
-    constructor(engine) {this.e=engine;this.tab='memory';this.archiveTab='summary';this.archiveFilter='all';this.archiveSearch='';this.arcOrderManual=false;this.promptTab='summary';this.start=null;this.end=null;this.rangeEdges={start:null,end:null};this.rangeChatKey=null;this.rangeCache=new Map();this.chosen=[];this.expanded=new Set();this.editor=null;this.timer=null;this.renderId=0;}
+    constructor(engine) {this.e=engine;this.tab='memory';this.archiveTab='summary';this.archiveFilter='all';this.archiveSearch='';this.arcOrderManual=false;this.promptTab='summary';this.start=null;this.end=null;this.rangeEdges={start:null,end:null};this.rangeChatKey=null;this.rangeCache=new Map();this.chosen=[];this.expanded=new Set();this.editor=null;this.timer=null;this.renderId=0;this.windowState='closed';this.resumeDirty=false;}
     async mount(html) {
         const template=el('template');template.innerHTML=html;document.body.append(template.content);
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
         // Report the code that actually loaded, even if a newer manifest is already available.
         const version=el('span',{class:'pv-version','aria-label':'Версия интерфейса'},`v${UI_VERSION}`);
         const caption=this.panel.querySelector('.pv-caption')??this.panel.querySelector('.pv-header p');
-        if(caption){caption.classList.add('pv-caption');caption.parentElement.classList.add('pv-brand');caption.append(document.createTextNode(' · '),version);}
+        if(caption){caption.classList.add('pv-caption');caption.parentElement.classList.add('pv-brand');caption.append(document.createTextNode(' '),version);}
         else this.panel.querySelector('.pv-header').append(version);
         const head=this.panel.querySelector('.pv-header');
         if(!head.querySelector('.pv-brand-mark')){head.querySelector('h2 i')?.remove();const mark=el('div',{class:'pv-brand-mark','aria-hidden':'true'});mark.append(el('i',{class:'fa-solid fa-book-open'}));head.prepend(mark);}
-        const tabIcons={home:'fa-house',archive:'fa-box-archive',memory:'fa-brain',prompts:'fa-feather',settings:'fa-gear'};
-        this.panel.querySelectorAll('[data-tab]').forEach(b=>{const label=b.textContent.trim();b.replaceChildren(el('i',{class:'fa-solid '+tabIcons[b.dataset.tab],'aria-hidden':'true'}),el('span',{},label));});
-        this.panel.querySelector('[data-action="close"]').onclick=()=>this.panel.close();
+        this.panel.querySelectorAll('[data-tab]').forEach(b=>{const label=b.textContent.trim();b.setAttribute('aria-label',label);b.replaceChildren(el('span',{class:'pv-tab-full'},label));if(b.dataset.tab==='memory')b.append(el('span',{class:'pv-tab-short','aria-hidden':'true'},'Память'));});
+        // Also upgrade a cached older panel template without requiring a hard reload.
+        let minimize=this.panel.querySelector('[data-action="minimize"]');
+        if(!minimize){minimize=button('−',()=>this.minimize());minimize.dataset.action='minimize';minimize.classList.add('pv-icon');minimize.setAttribute('aria-label','Свернуть окно');this.panel.querySelector('[data-action="close"]').before(minimize);}
+        minimize.onclick=()=>this.minimize();
+        this.panel.querySelector('[data-action="close"]').onclick=()=>this.close();
+        this.restoreDock=el('div',{id:'pensieve-restore-dock',hidden:'true'});
+        const restore=iconButton('Омут памяти',()=>this.restore(),'fa-book-open');restore.setAttribute('aria-label','Восстановить Омут памяти');this.restoreDock.append(restore);
+        const composer=document.getElementById('send_form');
+        if(composer)composer.before(this.restoreDock);else this.panel.before(this.restoreDock);
+        if(!head.querySelector('.pv-sky')){const sky=el('div',{class:'pv-sky','aria-hidden':'true'});for(const name of ['hills','bridge','castle','eagle','sky-line'])sky.append(el('span',{class:'pv-'+name}));head.prepend(sky);}
         // Keep ST's document-wide drawer handlers out of this native modal's click path.
         this.panel.addEventListener('click',event=>event.stopPropagation());
         this.panel.addEventListener('close',()=>{
+            // close is queued by the browser; a rapid restore may already have reopened it.
+            if(this.panel.open)return;
+            if(this.windowState!=='minimized'){this.windowState='closed';this.restoreDock.hidden=true;}
             const target=this.returnFocus;
             if(target?.isConnected&&target.getClientRects().length)target.focus({preventScroll:true});
             else document.querySelector('#send_textarea')?.focus({preventScroll:true});
@@ -52,8 +63,12 @@ export class UI {
         c.eventSource.on(c.eventTypes.CHAT_CHANGED,()=>{
             this.e.host.inject('');if(this.e.busy)this.e.cancel();
             this.loadRange();this.chosen=[];this.arcOrderManual=false;this.archiveSearch='';this.expanded.clear();
+            this.resumeDirty=true;
+            this.panel.querySelector('.pv-chat-name').textContent=this.e.host.context().chatId?`Чат: ${this.e.host.context().chatId}`:'Общие настройки · чат не открыт';
             if(this.editor){this.editor.close();this.editor.remove();this.editor=null;}
-            this.schedule(true);
+            // Prompts are global: a chat event must never replace their unsaved DOM.
+            if(this.tab!=='prompts'&&this.panel.open){this.rememberView();this.content.dataset.ready='false';this.content.replaceChildren(el('p',{class:'pv-muted'},'Загрузка архива…'));}
+            this.schedule(this.tab!=='prompts');
         });
         for(const name of ['MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_SENT','MESSAGE_RECEIVED','MORE_MESSAGES_LOADED','USER_MESSAGE_RENDERED','CHARACTER_MESSAGE_RENDERED'])if(c.eventTypes[name])c.eventSource.on(c.eventTypes[name],()=>this.schedule());
         const chat=document.querySelector('#chat');if(chat)new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes].some(n=>n.nodeType===1&&(n.matches?.('.mes')||n.querySelector?.('.mes')))))this.schedule();}).observe(chat,{childList:true,subtree:true});
@@ -154,9 +169,40 @@ export class UI {
         try {const result=await fn();await this.refresh(true);return result;}
         catch(error){this.showNotice(error.message);this.e.host.notify('error',error.message);await this.refresh(false).catch(()=>{});return null;}
     }
-    open(tab=this.tab) {if(!this.panel.open)this.panel.showModal();this.go(tab);}
+    open(tab=this.tab) {
+        const resume=this.windowState==='minimized'&&tab===this.tab;
+        this.windowState='open';this.restoreDock.hidden=true;
+        if(!this.panel.open)this.panel.showModal();
+        // ST replaces chat metadata before emitting CHAT_CHANGED. Check the live
+        // session synchronously, including during a pending chat network request.
+        if(!resume||(tab!=='prompts'&&(this.resumeDirty||!this.isCurrentSession())))this.go(tab);
+        this.resumeDirty=false;
+    }
+    minimize() {if(!this.panel.open)return;this.windowState='minimized';this.restoreDock.hidden=false;this.panel.close();}
+    restore() {this.open();}
+    close() {this.windowState='closed';this.restoreDock.hidden=true;this.panel.close();}
+    isCurrentSession() {try{if(!this.renderSession)return false;this.e.assert(this.renderSession);return true;}catch{return false;}}
+    rememberView() {
+        if(this.content.dataset.ready!=='true')return;
+        this.workspaceViews??=new Map();
+        this.workspaceViews.set(JSON.stringify([this.renderSession?.key??null,this.content.dataset.view]),{
+            scroll:this.content.scrollTop,overlap:this.content.querySelector('[aria-label="Повторная обработка"]')?.value,
+            preview:!!this.content.querySelector('.pv-preview-details[open]'),help:!!this.content.querySelector('.pv-archive-help[open]'),
+            openEntries:[...this.content.querySelectorAll('[data-entry-id] .pv-entry-more[open]')].map(n=>n.closest('[data-entry-id]').dataset.entryId),
+        });
+    }
+    restoreView() {
+        this.content.dataset.ready='true';
+        const saved=this.workspaceViews?.get(JSON.stringify([this.renderSession?.key??null,this.tab]));if(!saved)return;
+        const overlap=this.content.querySelector('[aria-label="Повторная обработка"]');if(overlap&&[...overlap.options].some(o=>o.value===saved.overlap))overlap.value=saved.overlap;
+        const preview=this.content.querySelector('.pv-preview-details');if(preview)preview.open=saved.preview;
+        const help=this.content.querySelector('.pv-archive-help');if(help)help.open=saved.help;
+        for(const details of this.content.querySelectorAll('[data-entry-id] .pv-entry-more'))details.open=saved.openEntries.includes(details.closest('[data-entry-id]').dataset.entryId);
+        this.content.scrollTop=saved.scroll;
+    }
     go(tab) {this.tab=tab;this.showNotice('');this.render().catch(error=>this.showNotice(error.message));}
     async refresh(render=false) {
+        if(this.windowState==='minimized')this.resumeDirty=true;
         const tab=this.tab;
         this.panel.dataset.theme=this.e.settings().theme;
         const memory=await this.e.refreshMemory();this.lastMemory=memory;this.decorateMessages();
@@ -166,16 +212,20 @@ export class UI {
     }
     async render(snapshot=null) {
         const stamp=++this.renderId;this.panel.dataset.theme=this.e.settings().theme;
+        this.rememberView();this.content.dataset.ready='false';
+        this.content.dataset.view=this.tab;
         this.panel.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-current',b.dataset.tab===this.tab?'page':'false'));
         this.content.replaceChildren(el('p',{class:'pv-muted'},'Загрузка архива…'));
         let session;try{session=this.e.session();}catch{
+            this.renderSession=null;
             this.lastMemory=null;this.viewState=null;this.sourceRanges=null;
             this.panel.querySelector('.pv-chat-name').textContent='Общие настройки · чат не открыт';this.content.replaceChildren();
             if(this.tab==='prompts')this.promptsView();
             else if(this.tab==='settings')this.settingsView(null);
             else this.content.append(el('p',{class:'pv-empty'},'Откройте сохранённый чат, чтобы работать с его памятью.'),row(button('Промпты',()=>this.go('prompts')),button('Общие настройки',()=>this.go('settings'))));
-            return;
+            this.restoreView();return;
         }
+        this.renderSession=session;
         const memory=snapshot??await this.e.refreshMemory();if(stamp!==this.renderId)return;this.e.assert(session);
         const archive=this.e.archive(session);this.lastMemory=memory;this.viewState=memoryViewState(archive.entries,memory,this.chosen);this.sourceRanges=this.e.orderEntries(archive.entries).ranges;
         if(this.rangeChatKey!==this.e.key())this.loadRange();else this.resolveRange();
@@ -188,6 +238,7 @@ export class UI {
         if(this.tab==='memory')await this.memoryView(archive,stamp);
         if(this.tab==='prompts')this.promptsView();
         if(this.tab==='settings')this.settingsView(archive);
+        this.restoreView();
     }
     home(archive) {
         const home=el('section',{class:'pv-home'}),actions=el('div',{class:'pv-home-actions'});
@@ -235,6 +286,7 @@ export class UI {
         form.append(el('p',{class:'pv-muted'},'После генерации проверьте и сохраните текст. Только затем исходные сообщения будут исключены из контекста.'));
     }
     archiveView(archive) {
+        this.content.append(el('h3',{class:'pv-view-heading'},'Архив воспоминаний'));
         this.content.append(row(button('Сводки',()=>{this.archiveTab='summary';this.render();},this.archiveTab==='summary'),button('Арки',()=>{this.archiveTab='arc';this.render();},this.archiveTab==='arc')));
         const tools=el('div',{class:'pv-archive-tools'}),search=el('input',{type:'search',value:this.archiveSearch,'aria-label':'Поиск воспоминаний',placeholder:'Название или текст…'});
         const filter=el('select',{'aria-label':'Фильтр архива'});for(const [value,title]of [['all','Все'],['active','Активные'],['inactive','Неактивные']])filter.append(el('option',{value},title));filter.value=this.archiveFilter;
@@ -277,31 +329,39 @@ export class UI {
         for(const e of entries)results.append(this.entryCard(e,archive));
     }
     entryCard(e,archive,activeView=false) {
-        const state=this.viewState.byId.get(e.id),card=el('article',{class:'pv-record pv-entry-card','data-entry-id':e.id,'data-memory-state':state.kind}),main=el('div',{class:'pv-entry-main'}),top=el('div',{class:'pv-record-top'});
+        const state=this.viewState.byId.get(e.id),card=el('article',{class:'pv-record pv-entry-card '+(activeView?'pv-memory-card':'pv-archive-row'),'data-entry-id':e.id,'data-memory-state':state.kind}),main=el('div',{class:'pv-entry-main'}),top=el('div',{class:'pv-record-top'});
         const heading=el('div',{class:'pv-entry-title'});
         if(!activeView&&e.type==='summary') {
             const check=el('input',{type:'checkbox',checked:this.chosen.includes(e.id),'aria-label':`Выбрать для арки: ${e.title}`});
             check.onchange=()=>{if(check.checked&&!this.chosen.includes(e.id))this.chosen.push(e.id);else if(!check.checked)this.chosen=this.chosen.filter(id=>id!==e.id);this.render();};const hit=el('label',{class:'pv-record-select'});hit.append(check);top.append(hit);
         }
         const display=entryDisplayTitle(e,archive.entries),number=display.match(/^(?:Сводка|Арка)\s*№\s*\d+/i)?.[0]??display,subtitle=display.slice(number.length).replace(/^\s*[—–\-:·]?\s*/,'');
-        const mark=el('div',{class:'pv-record-mark','aria-hidden':'true'});mark.append(el('i',{class:e.type==='arc'?'fa-solid fa-layer-group':'fa-solid fa-book-open'}));
-        heading.append(el('h4',{},number),el('span',{class:`pv-memory-status pv-memory-${state.kind}`},state.label));main.append(heading);if(subtitle)main.append(el('p',{class:'pv-record-subtitle'},subtitle));top.append(mark,main);card.append(top);
+        const mark=el('div',{class:'pv-record-mark','aria-hidden':'true'});mark.append(el('i',{class:'fa-solid fa-book-open'}));
+        // Membership is independent of activation; the engine's covering list
+        // still exclusively controls suppression and activation availability.
+        const parents=e.type==='summary'?archive.entries.filter(a=>a.type==='arc'&&a.summaryIds.includes(e.id)):[];
+        const parentLabel=a=>`Входит в арку №${a.title.match(/^Арка\s*№\s*(\d+)/i)?.[1]??archive.entries.filter(x=>x.type==='arc').indexOf(a)+1}`;
+        const primaryParent=state.covering[0];
+        const badge=primaryParent?button(parentLabel(primaryParent),()=>this.editEntry(primaryParent,false)):el('span',{},state.label);badge.className=`pv-memory-status pv-memory-${state.kind}`;
+        const glyph=el('i',{class:'fa-solid '+(state.kind==='arc'?'fa-link':state.kind==='active'?'fa-circle':'fa-circle-dot'),'aria-hidden':'true'});badge.prepend(glyph);
+        heading.append(el('h4',{},number),badge);main.append(heading);if(subtitle)main.append(el('p',{class:'pv-record-subtitle'},subtitle));top.append(mark,main);card.append(top);
+        if(parents.some(a=>a!==primaryParent)){const links=el('div',{class:'pv-entry-links'});for(const parent of parents.filter(a=>a!==primaryParent)){const link=iconButton(parentLabel(parent),()=>this.editEntry(parent,false),'fa-link');link.className='pv-memory-status pv-memory-arc';links.append(link);}main.append(links);}
         if(this.chosen.includes(e.id)&&e.type==='summary')heading.append(el('span',{class:'pv-selection-status'},'Выбрана для арки'));
         const range=this.sourceRanges?.get(e.id),location=range?`Сообщения ${range.start+1}–${range.end+1}`:'Порядок источников требует проверки';
         const status=e.type==='summary'?`${location} · ${e.sources.length} шт.`:`${location} · Сводок: ${e.summaryIds.length}`;
         const metadata=el('small',{class:'pv-entry-meta'},`${status} · Версия ${e.version} · Подсчёт токенов…`);main.append(metadata);
         this.e.host.count(e.text).then(n=>metadata.textContent=`${status} · Версия ${e.version} · ≈${n} токенов`).catch(()=>metadata.textContent=`${status} · Версия ${e.version} · Не удалось посчитать токены`);
         if(state.gate==='blocked')heading.append(el('span',{class:'pv-gate-status'},this.lastMemory.limitExceeded?'Не помещается в лимит':'Не внедряется: блокировка'));
-        const details=el('details',{class:'pv-entry-more'}),more=el('summary',{},'Дополнительные действия');details.append(more);
-        if(state.note)main.append(el('p',{class:'pv-status-note'},state.note));
+        const details=el('details',{class:'pv-entry-more'}),more=el('summary',{'aria-label':`Дополнительные действия: ${display}`},activeView?'Дополнительно':'···');details.append(more);
+        if(state.note)details.append(el('p',{class:'pv-status-note'},state.note));
         if(e.type==='summary') {
             const inspected=inspectSources(this.e.host.context().chat,e.sources);
             if(inspected.issues.length){heading.append(el('small',{class:'pv-gate-status'},`Требуют проверки источники: ${inspected.issues.length}`));details.append(el('p',{class:'pv-warning'},`Источники изменены, удалены или недоступны: ${inspected.issues.length}. Память требует проверки.`));}
             else if(inspected.matches.some(x=>x.moved))details.append(el('p',{class:'pv-muted'},'Номера сообщений изменились; источники найдены по постоянным ID.'));
         }
         if(e.needsReview){heading.append(el('span',{class:'pv-gate-status'},'Требует проверки'));details.append(el('p',{class:'pv-status-note'},'Требует проверки: исходная сводка или сообщение изменились.'));}
-        const toggle=button(e.active?'Убрать из памяти':'Добавить в память',()=>this.act(()=>this.e.toggle(e.id,!e.active)),!e.active&&!state.covering.length);toggle.disabled=!e.active&&state.covering.length>0;
-        const actions=row(button('Открыть',()=>this.editEntry(e,false)),button('Изменить',()=>this.editEntry(e,true)),toggle);actions.classList.add('pv-entry-actions');card.append(actions);
+        const toggle=iconButton(e.active?'Убрать из памяти':'Добавить в память',()=>this.act(()=>this.e.toggle(e.id,!e.active)),e.active?'fa-trash-can':'fa-plus');toggle.disabled=!e.active&&state.covering.length>0;
+        const actions=row(iconButton('Открыть',()=>this.editEntry(e,false),'fa-book-open'),iconButton('Изменить',()=>this.editEntry(e,true),'fa-pen'),toggle);actions.classList.add('pv-entry-actions');if(activeView)card.append(actions);else details.append(actions);
         details.append(row(button('Скопировать',()=>this.act(()=>copy(e.text))),button('Экспорт .txt',()=>download(`${e.type}-${e.id}.txt`,`${e.title}\n\n${e.text}`,'text/plain')),button('Перегенерировать',()=>this.act(()=>this.regenerateEntry(e))),button('Удалить',()=>this.act(async()=>{
             if(!await this.confirm('Удаление записи',`Удалить «${e.title}»? История чата останется. Для исходников сводки сначала используйте восстановление.`))return;
             const restore=e.type==='arc'?await this.confirm('Связанные сводки','Вернуть исходные сводки арки в активную память?'):false;
@@ -331,22 +391,22 @@ export class UI {
         amount.append(el('p',{class:'pv-memory-caption'},'Память для следующего ответа'),el('p',{class:'pv-memory-amount'},`≈${actualTokens.toLocaleString('ru-RU')} / ${limitValue.toLocaleString('ru-RU')} токенов`));
         head.append(amount,el('span',{class:'pv-connection '+(connected?'pv-connected':'')},!memory.enabled?'Отключена':memory.blocked?'Требует внимания':'Подключена'));
         const meter=el('div',{class:'pv-memory-meter','aria-hidden':'true'}),fill=el('span');fill.style.width=`${Math.min(100,Math.max(0,actualTokens/limitValue*100))}%`;meter.append(fill);
-        overview.append(head,meter,el('p',{class:'pv-memory-caption'},connected?'В модель попадут только записи из блока ниже.':`Выбрано ≈${Number.isFinite(memory.tokens)?memory.tokens.toLocaleString('ru-RU'):'—'} токенов. Сейчас блок не отправляется.`));this.content.append(overview);
+        overview.append(head,meter,el('p',{class:'pv-memory-caption'},connected?(state.actualText?'Подготовлена к отправке при следующем запросе персонажу.':'Память включена. Активных записей для отправки пока нет.'):`Выбрано ≈${Number.isFinite(memory.tokens)?memory.tokens.toLocaleString('ru-RU'):'—'} токенов. Сейчас блок не отправляется.`));this.content.append(overview);
         if(!memory.enabled)this.content.append(el('p',{class:'pv-warning'},'Внедрение памяти глобально отключено. Сохранённые записи сейчас не передаются модели.'));
         if(memory.blocked)this.content.append(el('p',{class:'pv-warning'},memory.reason));
         for(const warning of memory.orderWarnings??[])this.content.append(el('p',{class:'pv-warning'},warning));
-        const quick=row(iconButton('Посмотреть память',()=>this.textDialog('Итоговый блок памяти',state.actualText||'Память сейчас не внедряется.'),'fa-eye'),iconButton('Скопировать память',()=>this.act(()=>copy(state.actualText)),'fa-copy'),iconButton('Обновить',()=>this.act(()=>this.e.refreshMemory()),'fa-rotate'),iconButton(memory.enabled?'Отключить всю память':'Включить память',()=>this.setMemoryEnabled(!memory.enabled),'fa-power-off',!memory.enabled));quick.classList.add('pv-memory-quick');this.content.append(quick);
-        const limit=el('input',{type:'number',min:1,step:100,value:this.e.settings().tokenLimit,'aria-label':'Лимит памяти, токенов'});limit.onchange=()=>{const value=Number(limit.value);if(!Number.isFinite(value)||value<1){limit.value=this.e.settings().tokenLimit;return;}this.e.settings().tokenLimit=Math.floor(value);this.saveSettings();this.act(()=>this.e.refreshMemory());};const limitField=field('Лимит памяти, токенов',limit);limitField.classList.add('pv-memory-limit');this.content.append(limitField);
+        const quick=row(iconButton('Посмотреть память',()=>this.textDialog('Итоговый блок памяти',state.actualText||'Память сейчас не внедряется.'),'fa-book-open'),iconButton('Скопировать память',()=>this.act(()=>copy(state.actualText)),'fa-copy'),iconButton('Обновить',()=>this.act(()=>this.e.refreshMemory()),'fa-rotate'),iconButton(memory.enabled?'Отключить всю память':'Включить память',()=>this.setMemoryEnabled(!memory.enabled),'fa-power-off',!memory.enabled));quick.classList.add('pv-memory-quick');this.content.append(quick);
+        const limit=el('input',{type:'number',min:1,step:100,value:this.e.settings().tokenLimit,'aria-label':'Лимит памяти, токенов'});limit.onchange=()=>{const value=Number(limit.value);if(!Number.isFinite(value)||value<1){limit.value=this.e.settings().tokenLimit;return;}this.e.settings().tokenLimit=Math.floor(value);this.saveSettings();this.act(()=>this.e.refreshMemory());};const limitField=field('Лимит памяти, токенов',limit);limitField.classList.add('pv-memory-limit');
         const previews=el('div',{class:'pv-memory-previews'}),details=el('details'),summary=el('summary',{},'Итоговый блок памяти целиком');details.append(summary,el('pre',{},state.actualText||'Память сейчас не внедряется.'));previews.append(details);
         if(state.candidateText&&state.candidateText!==state.actualText){const draft=el('details');draft.append(el('summary',{},'Выбранные записи — предварительный просмотр'),el('p',{class:'pv-muted'},'Этот текст сохранён и выбран, но сейчас не внедряется в запрос.'),el('pre',{},state.candidateText),button('Скопировать выбранные записи',()=>this.act(()=>copy(state.candidateText))));previews.append(draft);}
         if(!archive.entries.length)this.content.append(el('p',{class:'pv-empty'},'Сначала создайте сводку.'));
         for(const [name,title,entries]of [['current','Сейчас в памяти модели',state.current],['archive','Только в архиве',this.e.orderEntries(chronological(state.archived)).entries]]){
-            const section=el('section',{'data-memory-section':name,class:'pv-memory-section'}),titleRow=el('div',{class:'pv-memory-section-heading'});titleRow.append(el('h3',{},title),el('span',{class:'pv-record-count','aria-label':'Записей: '+entries.length},String(entries.length)));
-            section.append(titleRow,el('p',{class:'pv-memory-description'},name==='current'?'Эти записи сейчас отправляются в модель и влияют на её ответы.':'Эти записи не отправляются в модель, но доступны для просмотра и добавления в память.'));
+            const section=el('section',{'data-memory-section':name,class:'pv-memory-section'}),titleRow=el('div',{class:'pv-memory-section-heading'});titleRow.append(el('i',{class:'fa-solid '+(name==='current'?'fa-star':'fa-box-archive'),'aria-hidden':'true'}),el('h3',{},title),el('span',{class:'pv-record-count','aria-label':'Записей: '+entries.length},String(entries.length)));
+            section.append(titleRow,el('p',{class:'pv-memory-description'},name==='current'?'Эти записи подключены к памяти и подготовлены для следующего запроса персонажу.':'Эти записи не отправляются в модель, но доступны для просмотра и добавления в память.'));
             if(!entries.length)section.append(el('p',{class:'pv-muted'},name==='current'?'В сформированном блоке нет записей.':'Все записи включены в память.'));
             for(const e of entries)section.append(this.entryCard(e,archive,true));this.content.append(section);
         }
-        this.content.append(previews);
+        this.content.append(limitField,previews);
     }
     promptsView() {
         this.content.append(row(button('Промпт сводки',()=>{this.promptTab='summary';this.render();},this.promptTab==='summary'),button('Промпт арки',()=>{this.promptTab='arc';this.render();},this.promptTab==='arc')));
@@ -354,15 +414,23 @@ export class UI {
         const select=el('select',{'aria-label':'Пресет промпта'});group.presets.forEach(p=>select.append(el('option',{value:p.id},p.name)));select.value=preset.id;
         const text=el('textarea',{'aria-label':type==='summary'?'Промпт сводки':'Промпт арки',spellcheck:'false'},preset.text);
         select.onchange=async()=>{if(text.value!==preset.text&&!await this.confirm('Несохранённый промпт','Отбросить изменения и открыть другой пресет?')){select.value=preset.id;return;}group.selected=select.value;this.saveSettings();this.render();};
-        this.content.append(field('Пресет',select),field(type==='summary'?'Ваш промпт сводки':'Ваш промпт арки',text),el('p',{class:'pv-muted'},'Текст используется буквально, включая Markdown и {{макросы}}. Расширение не навязывает структуру сводки. Сохраните изменения перед генерацией.'));
+        text.classList.add('pv-prompt-text');
+        const editorHead=el('div',{class:'pv-prompt-heading'});editorHead.append(el('span',{},'Ваш промпт'),iconButton('Развернуть редактор',()=>this.expandPrompt(text),'fa-expand'));
+        this.content.append(field('Пресет',select),editorHead,field(type==='summary'?'Ваш промпт сводки':'Ваш промпт арки',text),el('p',{class:'pv-muted'},'Текст используется буквально, включая Markdown и {{макросы}}. Расширение не навязывает структуру сводки. Сохраните изменения перед генерацией.'));
         this.content.append(row(button('Сохранить промпт',()=>{preset.history.push(preset.text);preset.text=text.value;this.saveSettings();this.showNotice('Промпт сохранён.');},true),button('Новый пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(!name)return;const p={id:this.e.host.uuid(),name,text:text.value,history:[]};group.presets.push(p);group.selected=p.id;this.saveSettings();})),button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){preset.name=name;this.saveSettings();}})),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;this.saveSettings();}}))));
         this.content.append(row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;this.showNotice('Текст загружен в редактор. Нажмите «Сохранить промпт».');}}catch(error){this.showNotice(error.message);}}),button('Экспорт .txt',()=>download(`pensieve-prompt-${type}.txt`,text.value,'text/plain')),button('Удалить пресет',()=>this.act(async()=>{if(group.presets.length<2)throw Error('Последний пресет удалить нельзя.');if(await this.confirm('Удаление пресета','Удалить выбранный пресет?')){group.presets=group.presets.filter(p=>p.id!==preset.id);group.selected=group.presets[0].id;this.saveSettings();}}))));
     }
+    expandPrompt(text) {
+        const {dialog,body}=this.makeDialog('Редактор промпта');dialog.classList.add('pv-prompt-expanded');
+        const area=el('textarea',{'aria-label':'Полный редактор промпта',spellcheck:'false'},text.value);
+        body.append(area,button('Вернуться к промпту',()=>dialog.close(),true));
+        dialog.onclose=()=>{text.value=area.value;dialog.remove();};dialog.showModal();area.focus();
+    }
     saveSettings() {this.e.host.context().saveSettingsDebounced();this.schedule();}
     settingsView(archive) {
-        const settings=this.e.settings();this.content.append(el('h3',{},'Настройки памяти'));
+        const settings=this.e.settings();this.content.append(el('h3',{class:'pv-view-heading'},'Настройки'));
         const group=title=>{const section=el('fieldset',{class:'pv-setting-group'});section.append(el('legend',{},title));this.content.append(section);return section;};
-        const memory=group('Внедрение и лимит'),messages=group('Обработанные сообщения'),appearance=group('Отображение и пометка');
+        const memory=group('Память'),messages=group('Создание сводок'),archiveGroup=group('Архив'),appearance=group('Интерфейс');
         for(const [key,title]of [['enabled','Включить расширение'],['inject','Внедрять активную память'],['exclude','Исключать обработанные сообщения после сохранения'],['collapse','Визуально сворачивать обработанные сообщения'],['pastNoteEnabled','Не акцентировать прошлые события без необходимости']]){
             const check=el('input',{type:'checkbox',checked:settings[key]});check.onchange=()=>{settings[key]=check.checked;this.saveSettings();this.refresh();};const l=el('label');l.append(check,document.createTextNode(title));(['enabled','inject'].includes(key)?memory:['exclude','collapse'].includes(key)?messages:appearance).append(l);
         }
@@ -372,24 +440,25 @@ export class UI {
         memory.append(field('Позиция внедрения',position),field('Глубина в истории чата',depth));
         const note=el('textarea',{class:'pv-short'},settings.pastNote);note.onchange=()=>{settings.pastNote=note.value;this.saveSettings();};appearance.append(field('Редактируемая пометка о прошлых событиях',note));
         const theme=el('select');theme.append(el('option',{value:'dark'},'Полуночный синий'),el('option',{value:'light'},'Светлый пергамент'));theme.value=settings.theme;theme.onchange=()=>{settings.theme=theme.value;this.panel.dataset.theme=theme.value;this.saveSettings();};appearance.append(field('Тема панели',theme));
-        this.content.append(el('h3',{},'Резервное копирование'));
-        if(archive){this.content.append(el('p',{class:'pv-muted'},`Архив текущего чата: ${(bytes(archive)/1024).toFixed(1)} KiB. Резервная копия содержит личные тексты — храните её у себя.`));
-        this.content.append(row(button('Экспорт архива JSON',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2))),button('Импорт архива JSON',()=>this.act(async()=>{
+        archiveGroup.append(el('p',{class:'pv-muted'},'Резервное копирование'));
+        if(archive){archiveGroup.append(el('p',{class:'pv-muted'},`Архив текущего чата: ${(bytes(archive)/1024).toFixed(1)} KiB. Резервная копия содержит личные тексты — храните её у себя.`));
+        archiveGroup.append(row(button('Экспорт архива JSON',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2))),button('Импорт архива JSON',()=>this.act(async()=>{
             const f=await readFile('.json,application/json');if(!f)return;const incoming=parseArchive(f.text);
             const mode=await this.importMode();if(!mode)return;
             if(mode==='replace'&&!await this.confirm('Замена архива','Заменить текущий архив? Сначала рекомендуется экспорт. Источники импорт не скрывает.'))return;
             await this.e.importArchive(incoming,mode);this.showNotice('Архив импортирован. Состояние исходных сообщений не менялось.');
         }))));
-        }else this.content.append(el('p',{class:'pv-muted'},'Откройте сохранённый чат для экспорта, импорта и восстановления его архива. Общие настройки и промпты доступны без чата.'));
-        this.content.append(row(button('Экспорт промптов JSON',()=>download('pensieve-prompts.json',JSON.stringify({format:'pensieve-prompts',version:1,prompts:settings.prompts},null,2))),button('Импорт промптов JSON',()=>this.act(async()=>{
+        }else archiveGroup.append(el('p',{class:'pv-muted'},'Откройте сохранённый чат для экспорта, импорта и восстановления его архива. Общие настройки и промпты доступны без чата.'));
+        archiveGroup.append(row(button('Экспорт промптов JSON',()=>download('pensieve-prompts.json',JSON.stringify({format:'pensieve-prompts',version:1,prompts:settings.prompts},null,2))),button('Импорт промптов JSON',()=>this.act(async()=>{
             const f=await readFile('.json');if(!f)return;const data=JSON.parse(f.text);if(data.format!=='pensieve-prompts'||data.version!==1)throw Error('Неверный формат файла промптов.');
             const result=defaults().prompts;
             for(const type of ['summary','arc']){const g=data.prompts?.[type];if(!g||!Array.isArray(g.presets)||!g.presets.length||g.presets.length>100)throw Error('Неверный список пресетов.');const ids=new Set();result[type].presets=g.presets.map(p=>{if(typeof p.id!=='string'||!p.id||ids.has(p.id)||typeof p.name!=='string'||!p.name.trim()||typeof p.text!=='string')throw Error('Неверные поля пресета.');ids.add(p.id);return{id:p.id,name:p.name,text:p.text,history:Array.isArray(p.history)?p.history.filter(h=>typeof h==='string'):[]};});result[type].selected=ids.has(g.selected)?g.selected:result[type].presets[0].id;}
             if(await this.confirm('Импорт промптов','Заменить оба набора пресетов содержимым файла?')){settings.prompts=result;this.saveSettings();}
         }))));
         if(!archive)return;
-        this.content.append(el('h3',{},'Восстановление'),row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button('Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
-        this.content.append(button('Восстановить все исходники',()=>this.act(async()=>{
+        const recovery=el('details',{class:'pv-recovery'});recovery.append(el('summary',{},'Восстановление'));archiveGroup.append(recovery);
+        recovery.append(row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button('Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
+        recovery.append(button('Восстановить все исходники',()=>this.act(async()=>{
             if(!await this.confirm('Восстановление всех исходников','Вернуть исключённые этим расширением сообщения и отключить всю память текущего чата?'))return;
             let issues=0;for(const e of [...this.e.archive().entries])if(e.type==='summary'){const r=await this.e.restore(e.id);issues+=r.issues.length;}
             await this.e.disableAll();this.showNotice(issues?`Не удалось надёжно восстановить источники: ${issues}. Их состояние сохранено.`:'Исходники восстановлены. Архив сохранён.');
@@ -397,7 +466,7 @@ export class UI {
     }
     makeDialog(title) {
         const dialog=el('dialog',{class:'pensieve pv-editor','data-theme':this.e.settings().theme});
-        const head=el('header',{class:'pv-header'});head.append(el('h2',{},title));const body=el('div',{class:'pv-content'});dialog.append(head,body);document.body.append(dialog);return {dialog,body};
+        const head=el('header',{class:'pv-header'}),close=button('×',()=>{if(dialog.dispatchEvent(new Event('cancel',{cancelable:true})))dialog.close();});close.classList.add('pv-icon');close.setAttribute('aria-label','Закрыть окно');head.append(el('h2',{},title),close);dialog.setAttribute('aria-label',title);const body=el('div',{class:'pv-content'});dialog.append(head,body);document.body.append(dialog);return {dialog,body};
     }
     confirm(title,message) {
         return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title);body.append(el('p',{},message),row(button('Подтвердить',()=>{dialog.returnValue='yes';dialog.close();},true),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const yes=dialog.returnValue==='yes';dialog.remove();resolve(yes);};dialog.showModal();});
@@ -432,6 +501,10 @@ export class UI {
         const {dialog,body}=this.makeDialog(editable?'Редактирование воспоминания':entry.title);this.editor=dialog;
         const title=el('input',{value:entry.title,'aria-label':'Название записи'}),text=el('textarea',{'aria-label':'Текст записи'},entry.text);title.readOnly=text.readOnly=!editable;
         body.append(field('Название',title),field('Текст',text));
+        const range=this.sourceRanges?.get(entry.id),details=el('div',{class:'pv-record-info'}),state=this.viewState?.byId.get(entry.id);
+        const info=el('p',{class:'pv-muted'},`${range?`Сообщения ${range.start+1}–${range.end+1}`:'Порядок источников требует проверки'} · Версия ${entry.version}`);details.append(info);
+        this.e.host.count(entry.text).then(n=>info.append(document.createTextNode(` · ≈${n} токенов`))).catch(()=>{});
+        if(state)details.append(el('p',{class:'pv-status-note'},[state.label,state.note].filter(Boolean).join(' · ')));body.prepend(details);
         const status=el('p',{role:'status'});body.append(status);
         if(editable)body.append(button('Сохранить изменения',async()=>{try{await this.e.edit(entry.id,{title:title.value,text:text.value});dialog.close();await this.refresh(true);}catch(error){status.textContent=error.message;}},true));
         if(entry.history.length) {
