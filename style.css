@@ -3,72 +3,109 @@
 .pensieve::backdrop{background:#07111fc2;backdrop-filter:blur(3px)}
 .pensieve *{box-sizing:border-box;min-width:0}
 .pensieve [hidden]{display:none!important}
-.pv-header,.pv-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 24px}
-.pv-header{border-bottom:1px solid var(--pv-bronze);background:linear-gradient(125deg,var(--pv-panel),var(--pv-bg))}
+.pensieve .pv-header,.pensieve .pv-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 24px}
+.pensieve .pv-header{border-bottom:1px solid var(--pv-bronze);background:linear-gradient(125deg,var(--pv-panel),var(--pv-bg))}
 .pensieve h2,.pensieve h3{font-family:Georgia,'Times New Roman',serif;color:var(--pv-text);margin:0 0 8px;font-weight:normal;letter-spacing:.02em}
-.pensieve h2{font-size:26px}.pensieve h3{font-size:23px}.pv-header h2 i{font-size:21px;color:var(--pv-bronze);margin-right:7px}.pv-header p{margin:0;color:var(--pv-muted);font-size:13px}
-.pv-tabs{display:flex;gap:4px;padding:10px 18px;border-bottom:1px solid var(--pv-line);overflow:auto}
+.pensieve h2{font-size:26px}.pensieve h3{font-size:23px}.pensieve .pv-header h2 i{font-size:21px;color:var(--pv-bronze);margin-right:7px}.pensieve .pv-header p{margin:0;color:var(--pv-muted);font-size:13px}
+.pensieve .pv-tabs{display:flex;gap:4px;padding:10px 18px;border-bottom:1px solid var(--pv-line);overflow:auto}
 .pensieve button,.pensieve select,.pensieve input,.pensieve textarea{font:inherit;color:var(--pv-text)}
 .pensieve button{cursor:pointer;background:var(--pv-panel);border:1px solid var(--pv-line);border-radius:8px;min-height:42px;padding:8px 12px;white-space:normal;line-height:1.25;transition:background .15s}
 .pensieve button:hover,.pensieve button[aria-current="page"]{background:var(--pv-active);border-color:var(--pv-bronze)}
 .pensieve button:focus-visible,.pensieve input:focus-visible,.pensieve textarea:focus-visible,.pensieve select:focus-visible{outline:2px solid var(--pv-bronze);outline-offset:3px}
-.pensieve button:disabled{opacity:.5;cursor:wait}.pv-tabs button{flex:none;background:transparent;border-color:transparent}.pensieve button.pv-primary{border-color:var(--pv-bronze);background:var(--pv-active)}
-.pensieve .pv-icon{font-size:25px;background:transparent;min-width:42px;padding:0}.pv-content{padding:24px;overflow:auto;max-height:calc(100dvh - 250px);min-height:220px;scrollbar-gutter:stable;overscroll-behavior:contain}
-.pv-footer{border-top:1px solid var(--pv-line);font-size:11px;color:var(--pv-muted);padding:10px 24px;flex-wrap:wrap}
-.pv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.pv-big{padding:24px!important;font-size:18px!important;text-align:left}.pv-big i{display:block;color:var(--pv-bronze);margin-bottom:12px;font-size:24px}
-.pv-stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0;color:var(--pv-muted);font-size:13px}.pv-card{border:1px solid var(--pv-line);background:var(--pv-panel);border-radius:10px;padding:16px;margin:12px 0}.pv-card h4{font-size:16px;font-weight:600;margin:0 0 4px;overflow-wrap:anywhere}.pv-card p{margin:6px 0}.pv-muted,.pensieve small{color:var(--pv-muted)}
-.pv-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}.pv-row>label{flex:1}.pv-range{display:grid;grid-template-columns:1fr 1fr;gap:12px}.pensieve label{display:block;margin:10px 0;overflow-wrap:anywhere}.pensieve input:not([type="checkbox"]),.pensieve textarea,.pensieve select{display:block;width:100%;background:var(--pv-bg);border:1px solid var(--pv-line);border-radius:7px;padding:10px;margin-top:6px}.pensieve input[type="checkbox"]{accent-color:var(--pv-bronze);width:19px;height:19px;vertical-align:middle;margin-right:8px}.pensieve textarea{resize:vertical;min-height:230px;line-height:1.6;tab-size:4}.pensieve .pv-short{min-height:100px}.pensieve pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0;max-height:300px;overflow:auto}.pv-notice{padding:12px 24px;background:var(--pv-active);border-bottom:1px solid var(--pv-bronze);overflow-wrap:anywhere}.pensieve .pv-warning{border-left:3px solid var(--pv-bronze);padding:10px 14px;background:var(--pv-panel);margin:12px 0}.pv-empty{padding:35px 12px;color:var(--pv-muted);text-align:center}.pv-entry-title{display:flex;gap:6px;align-items:center}.pv-entry-title input{flex:none}.pensieve details>summary{cursor:pointer;padding:8px 0;color:var(--pv-bronze)}.pensieve progress{width:100%;accent-color:var(--pv-bronze)}
-.pensieve.pv-editor{width:min(850px,calc(100vw - 24px))}.pv-editor .pv-content{max-height:calc(100dvh - 170px)}.pv-editor textarea{min-height:36dvh}.pv-editor .pv-header h2{font-size:22px}.pv-message-action{display:inline-flex!important;align-items:center;gap:5px;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;min-height:30px;padding:3px 7px}.pv-message-action i{color:#b79c73}.pv-message-action span{font-size:12px}.mes.pensieve-start{border-left:3px solid #b79c73!important}.mes.pensieve-end{border-right:3px solid #b79c73!important}.mes.pensieve-collapsed .mes_text{max-height:3.5em;overflow:hidden}.pv-message-status{font:12px/1.4 system-ui,sans-serif;color:#b79c73;margin:6px 0}.pv-expand{font:inherit;color:inherit;background:transparent;border:1px solid #b79c7377;border-radius:4px;margin-left:8px;cursor:pointer;min-height:28px}
-@media(max-width:600px){.pensieve{width:calc(100vw - 12px);max-width:calc(100vw - 12px);max-height:calc(100dvh - 12px);border-radius:10px}.pv-header{padding:14px}.pensieve h2{font-size:23px}.pv-tabs{padding:8px;gap:2px}.pv-tabs button{padding:8px 9px;font-size:13px}.pv-content{padding:14px;max-height:calc(100dvh - 230px)}.pv-grid{grid-template-columns:1fr}.pv-big{padding:17px!important}.pv-big i{display:inline;margin-right:12px;font-size:20px}.pv-footer{padding:8px 14px}.pv-row button{flex:1 1 auto;min-height:44px}.pv-range{gap:8px}.pensieve textarea{font-size:16px}.pv-editor .pv-content{max-height:calc(100dvh - 150px)}}
-@supports(padding:max(0px)){.pv-footer{padding-bottom:max(10px,env(safe-area-inset-bottom))}}
+.pensieve button:disabled{opacity:.5;cursor:wait}.pensieve .pv-tabs button{flex:none;background:transparent;border-color:transparent}.pensieve button.pv-primary{border-color:var(--pv-bronze);background:var(--pv-active)}
+.pensieve .pv-icon{font-size:25px;background:transparent;min-width:42px;padding:0}.pensieve .pv-content{padding:24px;overflow:auto;max-height:calc(100dvh - 250px);min-height:220px;scrollbar-gutter:stable;overscroll-behavior:contain}
+.pensieve .pv-footer{border-top:1px solid var(--pv-line);font-size:11px;color:var(--pv-muted);padding:10px 24px;flex-wrap:wrap}
+.pensieve .pv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.pensieve .pv-big{padding:24px!important;font-size:18px!important;text-align:left}.pensieve .pv-big i{display:block;color:var(--pv-bronze);margin-bottom:12px;font-size:24px}
+.pensieve .pv-stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0;color:var(--pv-muted);font-size:13px}.pensieve .pv-card{border:1px solid var(--pv-line);background:var(--pv-panel);border-radius:10px;padding:16px;margin:12px 0}.pensieve .pv-card h4{font-size:16px;font-weight:600;margin:0 0 4px;overflow-wrap:anywhere}.pensieve .pv-card p{margin:6px 0}.pensieve .pv-muted,.pensieve small{color:var(--pv-muted)}
+.pensieve .pv-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}.pensieve .pv-row>label{flex:1}.pensieve .pv-range{display:grid;grid-template-columns:1fr 1fr;gap:12px}.pensieve label{display:block;margin:10px 0;overflow-wrap:anywhere}.pensieve input:not([type="checkbox"]),.pensieve textarea,.pensieve select{display:block;width:100%;background:var(--pv-bg);border:1px solid var(--pv-line);border-radius:7px;padding:10px;margin-top:6px}.pensieve input[type="checkbox"]{accent-color:var(--pv-bronze);width:19px;height:19px;vertical-align:middle;margin-right:8px}.pensieve textarea{resize:vertical;min-height:230px;line-height:1.6;tab-size:4}.pensieve .pv-short{min-height:100px}.pensieve pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0;max-height:300px;overflow:auto}.pensieve .pv-notice{padding:12px 24px;background:var(--pv-active);border-bottom:1px solid var(--pv-bronze);overflow-wrap:anywhere}.pensieve .pv-warning{border-left:3px solid var(--pv-bronze);padding:10px 14px;background:var(--pv-panel);margin:12px 0}.pensieve .pv-empty{padding:35px 12px;color:var(--pv-muted);text-align:center}.pensieve .pv-entry-title{display:flex;gap:6px;align-items:center}.pensieve .pv-entry-title input{flex:none}.pensieve details>summary{cursor:pointer;padding:8px 0;color:var(--pv-bronze)}.pensieve progress{width:100%;accent-color:var(--pv-bronze)}
+.pensieve.pv-editor{width:min(850px,calc(100vw - 24px))}.pensieve.pv-editor .pv-content{max-height:calc(100dvh - 170px)}.pensieve.pv-editor textarea{min-height:36dvh}.pensieve.pv-editor .pv-header h2{font-size:22px}#chat .pv-message-action{display:inline-flex!important;align-items:center;gap:5px;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;min-height:30px;padding:3px 7px}#chat .pv-message-action i{color:#b79c73}#chat .pv-message-action span{font-size:12px}#chat .mes.pensieve-start{border-left:3px solid #b79c73!important}#chat .mes.pensieve-end{border-right:3px solid #b79c73!important}#chat .mes.pensieve-collapsed .mes_text{max-height:3.5em;overflow:hidden}#chat .pv-message-status{font:12px/1.4 system-ui,sans-serif;color:#b79c73;margin:6px 0}#chat .pv-expand{font:inherit;color:inherit;background:transparent;border:1px solid #b79c7377;border-radius:4px;margin-left:8px;cursor:pointer;min-height:28px}
+@media(max-width:600px){.pensieve{width:calc(100vw - 12px);max-width:calc(100vw - 12px);max-height:calc(100dvh - 12px);border-radius:10px}.pensieve .pv-header{padding:14px}.pensieve h2{font-size:23px}.pensieve .pv-tabs{padding:8px;gap:2px}.pensieve .pv-tabs button{padding:8px 9px;font-size:13px}.pensieve .pv-content{padding:14px;max-height:calc(100dvh - 230px)}.pensieve .pv-grid{grid-template-columns:1fr}.pensieve .pv-big{padding:17px!important}.pensieve .pv-big i{display:inline;margin-right:12px;font-size:20px}.pensieve .pv-footer{padding:8px 14px}.pensieve .pv-row button{flex:1 1 auto;min-height:44px}.pensieve .pv-range{gap:8px}.pensieve textarea{font-size:16px}.pensieve.pv-editor .pv-content{max-height:calc(100dvh - 150px)}}
+@supports(padding:max(0px)){.pensieve .pv-footer{padding-bottom:max(10px,env(safe-area-inset-bottom))}}
 @media(prefers-reduced-motion:reduce){.pensieve *{transition:none!important;animation:none!important}}
-@media(max-width:600px){.pv-tabs{flex-wrap:wrap;overflow:visible}.pv-content{max-height:calc(100dvh - 275px)}}
+@media(max-width:600px){.pensieve .pv-tabs{flex-wrap:wrap;overflow:visible}.pensieve .pv-content{max-height:calc(100dvh - 275px)}}
 
 /* Native extensions drawer: scoped independently of the archive dialogs. */
-#pensieve-settings.pensieve-settings {
+#pensieve-settings.pensieve-settings{
     width:100%;max-width:100%;min-width:0;box-sizing:border-box;
     align-self:stretch;flex:0 0 auto;color:#F0E8DC;
 }
-#pensieve-settings *,#pensieve-settings > .inline-drawer {
+#pensieve-settings *,#pensieve-settings > .inline-drawer{
     box-sizing:border-box;min-width:0;
 }
-#pensieve-settings > .inline-drawer {width:100%;max-width:100%}
-#pensieve-settings .inline-drawer-toggle.inline-drawer-header.pv-settings-header {
+#pensieve-settings > .inline-drawer{width:100%;max-width:100%}
+#pensieve-settings .inline-drawer-toggle.inline-drawer-header.pv-settings-header{
     width:100%;max-width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;
     background:#14243D;border:1px solid #B79C73;border-radius:10px;
     padding:2px 5px;margin-bottom:5px;color:#F0E8DC;font:inherit;text-align:left;cursor:pointer;touch-action:manipulation;
 }
-#pensieve-settings [hidden] {display:none!important}
-#pensieve-settings .pv-settings-title {
+#pensieve-settings [hidden]{display:none!important}
+#pensieve-settings .pv-settings-title{
     display:flex;align-items:center;gap:8px;flex:1 1 auto;white-space:nowrap;
     word-break:normal;overflow-wrap:normal;line-height:1.5;
 }
-#pensieve-settings .pv-settings-title i,
-#pensieve-settings .inline-drawer-icon {color:#B79C73;flex:0 0 auto}
-#pensieve-settings .inline-drawer-icon {margin-left:auto;filter:none}
-#pensieve-settings .pv-settings-content {
+#pensieve-settings .pv-settings-title i,#pensieve-settings .inline-drawer-icon{color:#B79C73;flex:0 0 auto}
+#pensieve-settings .inline-drawer-icon{margin-left:auto;filter:none}
+#pensieve-settings .pv-settings-content{
     width:100%;max-width:100%;background:#14243D;border:1px solid #B79C7377;
     border-radius:10px;padding:10px;margin-bottom:5px;
 }
-#pensieve-settings .pv-settings-actions {display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%}
-#pensieve-settings .pv-settings-action {
+#pensieve-settings .pv-settings-actions{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%}
+#pensieve-settings .pv-settings-action{
     display:flex;align-items:center;gap:10px;width:100%;max-width:100%;min-height:40px;
     padding:8px 12px;margin:0;background:#263F60;color:#F0E8DC;border:1px solid #B79C7366;
     border-radius:7px;font:inherit;line-height:1.4;text-align:left;cursor:pointer;
     white-space:normal;word-break:normal;overflow-wrap:normal;hyphens:none;
 }
-#pensieve-settings .pv-settings-action i {flex:0 0 18px;text-align:center;color:#B79C73}
-#pensieve-settings .pv-settings-action span {flex:1 1 auto}
-#pensieve-settings .pv-settings-action {touch-action:manipulation}
-#pensieve-settings .pv-settings-action > * {pointer-events:none}
-.pensieve .pv-icon {touch-action:manipulation}
+#pensieve-settings .pv-settings-action i{flex:0 0 18px;text-align:center;color:#B79C73}
+#pensieve-settings .pv-settings-action span{flex:1 1 auto}
+#pensieve-settings .pv-settings-action{touch-action:manipulation}
+#pensieve-settings .pv-settings-action > *{pointer-events:none}
+.pensieve .pv-icon{touch-action:manipulation}
 /* Keep the existing main dialog usable when a mobile viewport becomes short. */
-#pensieve-panel[open] {display:flex;flex-direction:column}
-#pensieve-panel > .pv-header,
-#pensieve-panel > .pv-tabs,
-#pensieve-panel > .pv-notice,
-#pensieve-panel > .pv-footer {flex:0 0 auto}
-#pensieve-panel > .pv-content {flex:1 1 auto;min-height:0;max-height:none}
-#pensieve-settings .pv-settings-action:hover {border-color:#B79C73;background:#2e4b70}
-#pensieve-settings .pv-settings-header:focus-visible,
-#pensieve-settings .pv-settings-action:focus-visible {outline:2px solid #B79C73;outline-offset:2px}
+#pensieve-panel[open]{display:flex;flex-direction:column}
+#pensieve-panel > .pv-header,#pensieve-panel > .pv-tabs,#pensieve-panel > .pv-notice,#pensieve-panel > .pv-footer{flex:0 0 auto}
+#pensieve-panel > .pv-content{flex:1 1 auto;min-height:0;max-height:none}
+#pensieve-settings .pv-settings-action:hover{border-color:#B79C73;background:#2e4b70}
+#pensieve-settings .pv-settings-header:focus-visible,#pensieve-settings .pv-settings-action:focus-visible{outline:2px solid #B79C73;outline-offset:2px}
+
+/* Compact archive presentation; no selectors apply outside Pensieve. */
+.pensieve .pv-header {padding:12px 16px;gap:10px}
+.pensieve h2 {font-size:22px}
+.pensieve h3 {font-size:19px}
+.pensieve .pv-header p {font-size:12px}
+.pensieve .pv-content {padding:14px 16px}
+.pensieve .pv-tabs {padding:6px 10px}
+.pensieve .pv-tabs button {padding:7px 9px;min-height:36px}
+.pensieve button {min-height:38px;padding:7px 10px;background:transparent;word-break:normal;overflow-wrap:normal}
+.pensieve button.pv-primary {background:var(--pv-active);border-color:var(--pv-bronze);font-weight:600}
+.pensieve .pv-icon {min-width:42px;min-height:42px}
+.pensieve .pv-grid {gap:8px}
+.pensieve .pv-big {padding:12px 14px!important;font-size:15px!important}
+.pensieve .pv-big i {display:inline-block;margin:0 8px 0 0;font-size:17px}
+.pensieve .pv-card {padding:11px 12px;margin:8px 0;border-radius:8px}
+.pensieve .pv-card h4 {font-size:14px;margin:0;line-height:1.45}
+.pensieve .pv-card p {margin:5px 0}
+.pensieve .pv-row {gap:6px;margin:7px 0}
+.pensieve .pv-entry-title {flex-wrap:wrap;align-items:center;gap:6px}
+.pensieve .pv-entry-title h4 {flex:1 1 120px}
+.pensieve .pv-entry-meta {display:block;font-size:12px;line-height:1.5;margin:5px 0}
+.pensieve .pv-memory-status,.pensieve .pv-selection-status,.pensieve .pv-gate-status {display:inline-block;font-size:12px;line-height:1.45;border-radius:4px;padding:2px 6px;color:var(--pv-bronze);background:var(--pv-bg);word-break:normal}
+.pensieve .pv-memory-active {background:var(--pv-active);color:var(--pv-text)}
+.pensieve .pv-selection-status {background:var(--pv-active);color:var(--pv-text);margin:4px 0 0}
+.pensieve .pv-status-note {font-size:12px;color:var(--pv-muted)}
+.pensieve .pv-memory-section {margin-top:16px}
+.pensieve .pv-memory-section > h3 {margin-bottom:2px}
+.pensieve .pv-arc-selection {padding:8px 0;border-bottom:1px solid var(--pv-line);margin:8px 0}
+.pensieve .pv-range-preview {padding:8px 10px;border-left:2px solid var(--pv-bronze);margin:8px 0;background:var(--pv-panel)}
+.pensieve details > summary {font-size:13px;padding:6px 0}
+.pensieve .pv-stats {margin:12px 0;gap:8px}
+@media(max-width:600px){
+    .pensieve .pv-header {padding:10px 12px}
+    .pensieve .pv-content {padding:10px 12px}
+    .pensieve .pv-tabs {gap:2px;padding:5px 7px}
+    .pensieve .pv-tabs button {font-size:12px;padding:7px 8px}
+    .pensieve .pv-row button {min-height:40px}
+    .pensieve .pv-big {padding:11px 12px!important}
+    .pensieve .pv-entry-card > .pv-row {display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+    .pensieve .pv-entry-card > .pv-row button {font-size:12px;padding:6px;line-height:1.4}
+}

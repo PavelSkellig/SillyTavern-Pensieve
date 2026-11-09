@@ -88,8 +88,9 @@ try {
  console.log('PASS actual ST: prompt file import, reload persistence, desktop/mobile dark/light layout');
  await panel.locator('[data-action="close"]').click();
  const sourceAction=page.locator('#chat .mes[mesid="180"] [data-pensieve-edge="start"]');assert.equal(await sourceAction.count(),1);await sourceAction.evaluate(n=>n.click());
- assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'181');
- await panel.locator('[data-action="close"]').click();await page.locator('#chat .mes[mesid="190"] [data-pensieve-edge="end"]').evaluate(n=>n.click());assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'191');
+ assert.equal(await panel.evaluate(n=>n.open),false);
+ await page.locator('#chat .mes[mesid="190"] [data-pensieve-edge="end"]').evaluate(n=>n.click());assert.equal(await panel.evaluate(n=>n.open),false);
+ await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'181');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'191');
  console.log('PASS actual ST: message menu selects both inclusive boundaries');
  const root='/scripts/extensions/third-party/SillyTavern-Pensieve';
  await page.evaluate(async root=>{

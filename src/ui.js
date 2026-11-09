@@ -1,4 +1,5 @@
-import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,parseArchive,chronological,captureRange,findOverlaps,inspectSources,memoryEntries} from './core.js';
+import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,parseArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint} from './core.js';
+import {memoryViewState,filterArchive} from './view-state.js';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -9,7 +10,7 @@ const readFile=accept=>new Promise(resolve=>{const input=el('input',{type:'file'
 async function copy(text){try{await navigator.clipboard.writeText(text);}catch{const t=el('textarea',{},text);document.body.append(t);t.select();const success=document.execCommand('copy');t.remove();if(!success)throw Error('Браузер запретил копирование. Выделите текст и скопируйте вручную.');}}
 
 export class UI {
-    constructor(engine) {this.e=engine;this.tab='home';this.archiveTab='summary';this.promptTab='summary';this.start=null;this.end=null;this.chosen=[];this.expanded=new Set();this.editor=null;this.timer=null;this.renderId=0;}
+    constructor(engine) {this.e=engine;this.tab='home';this.archiveTab='summary';this.archiveFilter='all';this.promptTab='summary';this.start=null;this.end=null;this.rangeEdges={start:null,end:null};this.rangeChatKey=null;this.rangeCache=new Map();this.chosen=[];this.expanded=new Set();this.editor=null;this.timer=null;this.renderId=0;}
     async mount(html) {
         const template=el('template');template.innerHTML=html;document.body.append(template.content);
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
@@ -27,20 +28,61 @@ export class UI {
         document.addEventListener('click',event=>{
             const action=event.target.closest('[data-pensieve-edge]');if(!action)return;
             const id=Number(action.closest('.mes')?.getAttribute('mesid'));if(!Number.isInteger(id))return;
-            if(action.dataset.pensieveEdge==='start')this.start=id;else this.end=id;
-            this.returnFocus=action;this.open('home');this.decorateMessages();
+            const edge=action.dataset.pensieveEdge;
+            this.rangeWarning=null;
+            this.setRangeEdge(edge,id);this.decorateMessages();
+            this.e.host.notify('success',`${edge==='start'?'Начало':'Конец'} сводки: сообщение №${id+1}.`);
+            if(this.panel.open&&this.tab==='home')this.render();
         });
         const c=this.e.host.context();
         c.eventSource.on(c.eventTypes.CHAT_CHANGED,()=>{
             this.e.host.inject('');if(this.e.busy)this.e.cancel();
-            this.start=null;this.end=null;this.chosen=[];this.expanded.clear();
+            this.loadRange();this.chosen=[];this.expanded.clear();
             if(this.editor){this.editor.close();this.editor.remove();this.editor=null;}
             this.schedule(true);
         });
         for(const name of ['MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_SENT','MESSAGE_RECEIVED','MORE_MESSAGES_LOADED','USER_MESSAGE_RENDERED','CHARACTER_MESSAGE_RENDERED'])if(c.eventTypes[name])c.eventSource.on(c.eventTypes[name],()=>this.schedule());
         const chat=document.querySelector('#chat');if(chat)new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes].some(n=>n.nodeType===1&&(n.matches?.('.mes')||n.querySelector?.('.mes')))))this.schedule();}).observe(chat,{childList:true,subtree:true});
-        await this.refresh();
+        this.loadRange();await this.refresh();
     }
+    rangeStorageKey() {return `pensieve_range_v1:${this.rangeChatKey}`;}
+    loadRange() {
+        this.start=null;this.end=null;this.rangeEdges={start:null,end:null};this.rangeChatKey=null;this.rangeWarning=null;
+        try{this.e.session();this.rangeChatKey=this.e.key();}catch{return;}
+        let saved=this.rangeCache.get(this.rangeChatKey);
+        if(!saved)try{saved=JSON.parse(sessionStorage.getItem(this.rangeStorageKey())??'null');}catch{}
+        if(saved&&typeof saved==='object')this.rangeEdges={start:saved.start??null,end:saved.end??null};
+        this.resolveRange();
+    }
+    persistRange() {
+        if(!this.rangeChatKey)return;
+        this.rangeCache.set(this.rangeChatKey,this.rangeEdges);
+        const record=edge=>edge?{id:edge.id,index:edge.index,hash:edge.hash}:null;
+        try{sessionStorage.setItem(this.rangeStorageKey(),JSON.stringify({start:record(this.rangeEdges.start),end:record(this.rangeEdges.end)}));}catch{}
+    }
+    setRangeEdge(edge,index) {
+        if(!['start','end'].includes(edge))return;
+        if(this.rangeChatKey!==this.e.key())this.loadRange();
+        const m=Number.isInteger(index)?this.e.host.context().chat[index]:null;
+        this.rangeEdges[edge]=m?{id:m.extra?.[KEY]?.id??null,index,hash:fingerprint(m),ref:m}:null;
+        this[edge]=m?index:null;this.persistRange();
+    }
+    resolveRange() {
+        if(!this.rangeChatKey)return;
+        const chat=this.e.host.context().chat;
+        for(const edge of ['start','end']) {
+            const saved=this.rangeEdges[edge];if(!saved){this[edge]=null;continue;}
+            let found=[];
+            if(saved.id)found=chat.map((m,i)=>m.extra?.[KEY]?.id===saved.id?i:-1).filter(i=>i>=0);
+            else if(saved.ref)found=chat.includes(saved.ref)?[chat.indexOf(saved.ref)]:[];
+            else found=chat.map((m,i)=>fingerprint(m)===saved.hash?i:-1).filter(i=>i>=0);
+            const index=found.length===1?found[0]:null;
+            if(index===null||fingerprint(chat[index])!==saved.hash){this.rangeEdges[edge]=null;this[edge]=null;this.rangeWarning='Выбранная граница изменена, удалена или неоднозначна. Укажите её заново.';}
+            else{saved.index=index;saved.ref=chat[index];this[edge]=index;}
+        }
+        this.persistRange();
+    }
+    clearRange() {this.rangeEdges={start:null,end:null};this.start=null;this.end=null;this.rangeWarning=null;this.persistRange();}
     async mountSettingsDrawer() {
         const {toggleDrawer}=await import('/scripts/utils.js');
         const container=document.getElementById('extensions_settings2')??document.getElementById('extensions_settings');
@@ -92,7 +134,7 @@ export class UI {
         });
         toggleDrawer(drawer,this.e.settings().ui?.drawerExpanded===true);restoring=false;
     }
-    schedule(render=false) {clearTimeout(this.timer);this.timer=setTimeout(()=>this.refresh(render).catch(error=>console.warn('[Pensieve]',error.message)),100);}
+    schedule(render=false) {const tab=this.tab,update=render||(this.panel?.open&&['archive','memory'].includes(tab));clearTimeout(this.timer);this.timer=setTimeout(()=>this.refresh(update&&this.tab===tab).catch(error=>console.warn('[Pensieve]',error.message)),100);}
     showNotice(text) {const n=this.panel.querySelector('.pv-notice');n.hidden=!text;n.textContent=text;}
     async act(fn) {
         try {const result=await fn();await this.refresh(true);return result;}
@@ -101,16 +143,22 @@ export class UI {
     open(tab=this.tab) {if(!this.panel.open)this.panel.showModal();this.go(tab);}
     go(tab) {this.tab=tab;this.showNotice('');this.render().catch(error=>this.showNotice(error.message));}
     async refresh(render=false) {
+        const tab=this.tab;
         this.panel.dataset.theme=this.e.settings().theme;
         const memory=await this.e.refreshMemory();this.lastMemory=memory;this.decorateMessages();
-        if(memory.blocked)this.showNotice(memory.reason);
-        if(render&&this.panel.open)await this.render();
+        if(memory.blocked&&tab!=='memory'){this.memoryNotice=memory.reason;this.showNotice(memory.reason);}
+        else if(this.panel.querySelector('.pv-notice').textContent===this.memoryNotice){this.showNotice('');this.memoryNotice=null;}
+        if(render&&this.panel.open&&this.tab===tab)await this.render(memory);
     }
-    async render() {
+    async render(snapshot=null) {
         const stamp=++this.renderId;this.panel.dataset.theme=this.e.settings().theme;
         this.panel.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-current',b.dataset.tab===this.tab?'page':'false'));
+        this.content.replaceChildren(el('p',{class:'pv-muted'},'Загрузка архива…'));
+        let session;try{session=this.e.session();}catch{this.content.replaceChildren(el('p',{class:'pv-empty'},'Откройте сохранённый чат, чтобы работать с его памятью.'));return;}
+        const memory=snapshot??await this.e.refreshMemory();if(stamp!==this.renderId)return;this.e.assert(session);
+        const archive=this.e.archive(session);this.lastMemory=memory;this.viewState=memoryViewState(archive.entries,memory,this.chosen);
+        if(this.rangeChatKey!==this.e.key())this.loadRange();else this.resolveRange();
         this.content.replaceChildren();
-        let archive;try{archive=this.e.archive();}catch{this.content.append(el('p',{class:'pv-empty'},'Откройте сохранённый чат, чтобы работать с его памятью.'));return;}
         this.panel.querySelector('.pv-chat-name').textContent=`Чат: ${this.e.host.context().chatId}`;
         if(archive.pending)this.content.append(el('div',{class:'pv-warning'},'Есть незавершённая операция. В настройках можно завершить её или вернуть исходники в контекст.'));
         if(bytes(archive)>WARN_ARCHIVE_BYTES)this.content.append(el('div',{class:'pv-warning'},'Архив больше 5 MiB. Сохраните резервную копию JSON.'));
@@ -127,14 +175,15 @@ export class UI {
         const settings=this.e.settings(),memory=this.lastMemory;
         const stats=el('div',{class:'pv-stats'},`Сводок: ${archive.entries.filter(e=>e.type==='summary').length} · Арок: ${archive.entries.filter(e=>e.type==='arc').length} · Память: ${settings.enabled&&settings.inject?(memory?.blocked?'требует внимания':'включена'):'выключена'} · ≈${memory?.tokens??0} токенов`);
         this.content.append(grid,stats,el('h3',{},'Новая сводка'),el('p',{class:'pv-muted'},'Отметьте границы в меню сообщений или укажите номера ниже. Первое сообщение имеет номер 1.'));
+        if(this.rangeWarning)this.content.append(el('p',{class:'pv-warning'},this.rangeWarning));
         const start=el('input',{type:'number',min:1,max:this.e.host.context().chat.length,name:'rangeStart',value:this.start===null?'':this.start+1});
         const end=el('input',{type:'number',min:1,max:this.e.host.context().chat.length,name:'rangeEnd',value:this.end===null?'':this.end+1});
         const range=el('div',{class:'pv-range'});range.append(field('Первое сообщение',start),field('Последнее сообщение',end));this.content.append(range);
-        const preview=el('div',{class:'pv-card'});this.content.append(preview);
+        const preview=el('div',{class:'pv-range-preview'});this.content.append(preview);
         let overlaps=[];
         const options=el('select',{'aria-label':'Повторная обработка'});options.append(el('option',{value:'block'},'Не обрабатывать повторно'),el('option',{value:'version'},'Разрешить отдельную версию'));
         const update=()=>{
-            this.start=start.value===''?null:Number(start.value)-1;this.end=end.value===''?null:Number(end.value)-1;
+            this.setRangeEdge('start',start.value===''?null:Number(start.value)-1);this.setRangeEdge('end',end.value===''?null:Number(end.value)-1);
             preview.replaceChildren();overlaps=[];
             try{const r=captureRange(this.e.host.context().chat,this.start,this.end);overlaps=findOverlaps(archive.entries,r);
                 preview.append(el('strong',{},`Сообщения ${this.start+1}–${this.end+1} · ${r.length} шт.`),el('p',{},`${r[0].name}: ${r[0].text.slice(0,200)}`),el('p',{},`${r.at(-1).name}: ${r.at(-1).text.slice(0,200)}`));
@@ -144,19 +193,21 @@ export class UI {
             for(const e of overlaps)options.append(el('option',{value:e.id,'data-replace':'true'},`Заменить: ${e.title}`));if([...options.options].some(o=>o.value===previous))options.value=previous;
             options.hidden=!overlaps.length;this.decorateMessages();
         };
-        start.oninput=end.oninput=update;update();this.content.append(options);
+        start.oninput=end.oninput=()=>{this.rangeWarning=null;update();};update();this.content.append(options);
         this.content.append(row(button('Создать сводку',()=>this.act(async()=>{
             if(this.start===null||this.end===null)throw Error('Сначала выберите обе границы.');
             if(overlaps.length&&options.value!=='block'&&!await this.confirm('Повторная обработка','Этот диапазон уже представлен в архиве. Продолжить выбранным способом?'))return;
             await this.generating(()=>this.e.generateSummary(this.start,this.end,{allowOverlap:options.value!=='block',replaceId:['block','version'].includes(options.value)?null:options.value}));
-        }),true),button('Отмена выделения',()=>{this.start=null;this.end=null;this.decorateMessages();this.render();})));
+        }),true),button('Отмена выделения',()=>{this.clearRange();this.decorateMessages();this.render();})));
         this.content.append(el('p',{class:'pv-muted'},'После генерации проверьте и сохраните текст. Только затем исходные сообщения будут исключены из контекста.'));
     }
     archiveView(archive) {
         this.content.append(row(button('Сводки',()=>{this.archiveTab='summary';this.render();},this.archiveTab==='summary'),button('Арки',()=>{this.archiveTab='arc';this.render();},this.archiveTab==='arc')));
+        const filter=el('select',{'aria-label':'Фильтр архива'});for(const [value,title]of [['all','Все'],['active','Активные'],['inactive','Неактивные']])filter.append(el('option',{value},title));filter.value=this.archiveFilter;filter.onchange=()=>{this.archiveFilter=filter.value;this.render();};
+        this.content.append(field('Показывать записи',filter),el('small',{},'Активные — записи в фактически сформированном блоке памяти. Сохранение в архиве само по себе не включает внедрение.'));
         if(this.archiveTab==='summary') {
             this.chosen=this.chosen.filter(id=>archive.entries.some(e=>e.id===id&&e.type==='summary'));
-            const chosen=el('div',{class:'pv-card'});chosen.append(el('strong',{},`Для арки выбрано: ${this.chosen.length}`));
+            const chosen=el('div',{class:'pv-arc-selection'});chosen.append(el('strong',{},`Для арки выбрано: ${this.chosen.length}`));
             this.chosen.forEach((id,i)=>{
                 const e=archive.entries.find(x=>x.id===id);
                 chosen.append(row(el('span',{},`${i+1}. ${e.title}`),button('↑',()=>{if(i){[this.chosen[i-1],this.chosen[i]]=[id,this.chosen[i-1]];this.render();}}),button('↓',()=>{if(i<this.chosen.length-1){[this.chosen[i+1],this.chosen[i]]=[id,this.chosen[i+1]];this.render();}})));
@@ -168,28 +219,32 @@ export class UI {
             }),true),button('По хронологии',()=>{this.chosen=chronological(selected).map(e=>e.id);this.render();}),button('Снять выбор',()=>{this.chosen=[];this.render();})));
             this.content.append(chosen);
         }
-        const entries=chronological(archive.entries.filter(e=>e.type===this.archiveTab));
-        if(!entries.length)this.content.append(el('p',{class:'pv-empty'},'Здесь появятся подтверждённые воспоминания.'));
+        const entries=chronological(filterArchive(archive.entries.filter(e=>e.type===this.archiveTab),this.viewState,this.archiveFilter));
+        if(!entries.length)this.content.append(el('p',{class:'pv-empty'},archive.entries.length?'Нет записей, подходящих под выбранный фильтр.':'Здесь появятся подтверждённые воспоминания.'));
         for(const e of entries)this.content.append(this.entryCard(e,archive));
     }
     entryCard(e,archive,activeView=false) {
-        const card=el('article',{class:'pv-card','data-entry-id':e.id});
-        const heading=el('div',{class:'pv-entry-title'}),check=el('input',{type:'checkbox',checked:activeView?e.active:this.chosen.includes(e.id),'aria-label':activeView?`Активность: ${e.title}`:`Выбрать для арки: ${e.title}`});
-        if(activeView||e.type==='summary') {check.onchange=()=>activeView?this.act(()=>this.e.toggle(e.id,check.checked)):(check.checked?this.chosen.push(e.id):this.chosen=this.chosen.filter(id=>id!==e.id),this.render());heading.append(check);}
-        heading.append(el('h4',{},e.title));card.append(heading);
+        const state=this.viewState.byId.get(e.id),card=el('article',{class:'pv-card pv-entry-card','data-entry-id':e.id,'data-memory-state':state.kind});
+        const heading=el('div',{class:'pv-entry-title'});
+        if(!activeView&&e.type==='summary') {
+            const check=el('input',{type:'checkbox',checked:this.chosen.includes(e.id),'aria-label':`Выбрать для арки: ${e.title}`});
+            check.onchange=()=>{if(check.checked&&!this.chosen.includes(e.id))this.chosen.push(e.id);else if(!check.checked)this.chosen=this.chosen.filter(id=>id!==e.id);this.render();};heading.append(check);
+        }
+        heading.append(el('h4',{},e.title),el('span',{class:`pv-memory-status pv-memory-${state.kind}`},state.label));card.append(heading);
+        if(state.selectedForArc)card.append(el('span',{class:'pv-selection-status'},'Выбрана для арки'));
         const status=e.type==='summary'?`Сообщения ${e.sources[0]?.index+1||'?'}–${e.sources.at(-1)?.index+1||'?'} · ${e.sources.length} шт.`:`Объединено сводок: ${e.summaryIds.length}`;
-        card.append(el('small',{},`${status} · Версия ${e.version} · ${e.active?'активна':'неактивна'}`));
+        const metadata=el('small',{class:'pv-entry-meta'},`${status} · Версия ${e.version} · Подсчёт токенов…`);card.append(metadata);
+        this.e.host.count(e.text).then(n=>metadata.textContent=`${status} · Версия ${e.version} · ≈${n} токенов`).catch(()=>metadata.textContent=`${status} · Версия ${e.version} · Не удалось посчитать токены`);
+        if(state.gate==='blocked')card.append(el('span',{class:'pv-gate-status'},this.lastMemory.tokens>this.e.settings().tokenLimit?'Не внедряется: лимит токенов':'Не внедряется: блокировка'));
+        if(state.note)card.append(el('p',{class:'pv-status-note'},state.note));
+        const details=el('details'),more=el('summary',{},'Дополнительные действия');details.append(more);
         if(e.type==='summary') {
             const inspected=inspectSources(this.e.host.context().chat,e.sources);
-            if(inspected.issues.length)card.append(el('p',{class:'pv-warning'},`Источники изменены, удалены или недоступны: ${inspected.issues.length}. Память требует проверки.`));
-            else if(inspected.matches.some(x=>x.moved))card.append(el('p',{class:'pv-muted'},'Номера сообщений изменились; источники найдены по постоянным ID.'));
+            if(inspected.issues.length){card.append(el('small',{class:'pv-gate-status'},`Требуют проверки источники: ${inspected.issues.length}`));details.append(el('p',{class:'pv-warning'},`Источники изменены, удалены или недоступны: ${inspected.issues.length}. Память требует проверки.`));}
+            else if(inspected.matches.some(x=>x.moved))details.append(el('p',{class:'pv-muted'},'Номера сообщений изменились; источники найдены по постоянным ID.'));
         }
-        if(e.needsReview)card.append(el('p',{class:'pv-warning'},'Требует проверки: исходная сводка или сообщение изменились.'));
-        if(e.type==='summary'&&archive.entries.some(a=>a.type==='arc'&&a.active&&a.summaryIds.includes(e.id)))card.append(el('p',{class:'pv-muted'},'Отдельно не внедряется: представлена активной аркой.'));
-        const tokens=el('small',{},'Подсчёт токенов…');card.append(tokens);
-        this.e.host.count(e.text).then(n=>tokens.textContent=`≈${n} токенов`).catch(()=>tokens.textContent='Не удалось посчитать токены');
-        card.append(row(button('Открыть',()=>this.editEntry(e,false)),button('Изменить',()=>this.editEntry(e,true)),button(e.active?'Деактивировать':'Активировать',()=>this.act(()=>this.e.toggle(e.id,!e.active)))));
-        const details=el('details'),more=el('summary',{},'Дополнительные действия');details.append(more);
+        if(e.needsReview)card.append(el('p',{class:'pv-status-note'},'Требует проверки: исходная сводка или сообщение изменились.'));
+        card.append(row(button('Открыть',()=>this.editEntry(e,false)),button('Изменить',()=>this.editEntry(e,true)),button(e.active?'Убрать из памяти':'Добавить в память',()=>this.act(()=>this.e.toggle(e.id,!e.active)))));
         details.append(row(button('Скопировать',()=>this.act(()=>copy(e.text))),button('Экспорт .txt',()=>download(`${e.type}-${e.id}.txt`,`${e.title}\n\n${e.text}`,'text/plain')),button('Перегенерировать',()=>this.act(()=>this.regenerateEntry(e))),button('Удалить',()=>this.act(async()=>{
             if(!await this.confirm('Удаление записи',`Удалить «${e.title}»? История чата останется. Для исходников сводки сначала используйте восстановление.`))return;
             const restore=e.type==='arc'?await this.confirm('Связанные сводки','Вернуть исходные сводки арки в активную память?'):false;
@@ -210,13 +265,20 @@ export class UI {
         return this.generating(()=>this.e.generateSummary(indices[0],indices.at(-1),{allowOverlap:true,replaceId:e.id}));
     }
     async memoryView(archive,stamp) {
-        const memory=await this.e.refreshMemory();if(stamp!==this.renderId)return;
+        const memory=this.lastMemory,state=this.viewState;if(stamp!==this.renderId)return;
         this.content.append(el('h3',{},'Активная память'),el('p',{class:'pv-muted'},`≈${memory.tokens} / ${this.e.settings().tokenLimit} токенов · ${memory.enabled&&!memory.blocked?'подключена':'не внедряется'}`));
+        if(!memory.enabled)this.content.append(el('p',{class:'pv-warning'},'Внедрение памяти глобально отключено. Сохранённые записи сейчас не передаются модели.'));
         if(memory.blocked)this.content.append(el('p',{class:'pv-warning'},memory.reason));
-        this.content.append(row(button('Посмотреть память',()=>this.textDialog('Память для модели',memory.text||'Активных записей нет.')),button('Скопировать память',()=>this.act(()=>copy(memory.text))),button('Обновить',()=>this.act(()=>this.e.refreshMemory())),button('Отключить всю память',()=>this.act(()=>this.e.disableAll()))));
-        const details=el('details'),summary=el('summary',{},'Итоговый блок памяти целиком');details.append(summary,el('pre',{},memory.text||'Активных записей нет.'));this.content.append(details);
+        this.content.append(row(button('Посмотреть память',()=>this.textDialog('Итоговый блок памяти',state.actualText||'Память сейчас не внедряется.')),button('Скопировать память',()=>this.act(()=>copy(state.actualText))),button('Обновить',()=>this.act(()=>this.e.refreshMemory())),button('Отключить всю память',()=>this.act(()=>this.e.disableAll()))));
+        const limit=el('input',{type:'number',min:1,step:100,value:this.e.settings().tokenLimit,'aria-label':'Лимит памяти, токенов'});limit.onchange=()=>{const value=Number(limit.value);if(!Number.isFinite(value)||value<1){limit.value=this.e.settings().tokenLimit;return;}this.e.settings().tokenLimit=Math.floor(value);this.saveSettings();this.act(()=>this.e.refreshMemory());};this.content.append(field('Лимит памяти, токенов',limit));
+        const details=el('details'),summary=el('summary',{},'Итоговый блок памяти целиком');details.append(summary,el('pre',{},state.actualText||'Память сейчас не внедряется.'));this.content.append(details);
+        if(state.candidateText&&state.candidateText!==state.actualText){const draft=el('details');draft.append(el('summary',{},'Выбранные записи — предварительный просмотр'),el('p',{class:'pv-muted'},'Этот текст сохранён и выбран, но сейчас не внедряется в запрос.'),el('pre',{},state.candidateText),button('Скопировать выбранные записи',()=>this.act(()=>copy(state.candidateText))));this.content.append(draft);}
         if(!archive.entries.length)this.content.append(el('p',{class:'pv-empty'},'Сначала создайте сводку.'));
-        for(const e of chronological(archive.entries))this.content.append(this.entryCard(e,archive,true));
+        for(const [name,title,entries]of [['current','Сейчас в памяти модели',state.current],['archive','Только в архиве',state.archived]]){
+            const section=el('section',{'data-memory-section':name,class:'pv-memory-section'});section.append(el('h3',{},title),el('small',{},`Записей: ${entries.length}`));
+            if(!entries.length)section.append(el('p',{class:'pv-muted'},name==='current'?'В сформированном блоке нет записей.':'Все записи включены в память.'));
+            for(const e of chronological(entries))section.append(this.entryCard(e,archive,true));this.content.append(section);
+        }
     }
     promptsView() {
         this.content.append(row(button('Промпт сводки',()=>{this.promptTab='summary';this.render();},this.promptTab==='summary'),button('Промпт арки',()=>{this.promptTab='arc';this.render();},this.promptTab==='arc')));
@@ -309,6 +371,7 @@ export class UI {
     decorateMessages() {
         let archive;try{archive=this.e.archive();}catch{return;}
         const c=this.e.host.context(),settings=this.e.settings(),processed=new Map();
+        if(this.rangeChatKey===this.e.key())this.resolveRange();
         for(const e of archive.entries.filter(e=>e.type==='summary'))for(const s of e.sources){if(!processed.has(s.id))processed.set(s.id,[]);processed.get(s.id).push(e.title);}
         for(const node of document.querySelectorAll('#chat .mes[mesid]')) {
             const index=Number(node.getAttribute('mesid')),m=c.chat[index];if(!m)continue;
