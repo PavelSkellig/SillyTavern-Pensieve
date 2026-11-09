@@ -151,3 +151,8 @@ test('long contiguous source restoration uses one native range save',async()=>{
  const f=fixture(),entry=await saved(f,1,6);let calls=0;const native=f.host.hide;f.host.hide=async(...args)=>{calls++;await native(...args);};await f.e.restore(entry.id);
  assert.equal(calls,1);assert.equal(f.c.chat[6].is_system,false);
 });
+test('actual memory order follows moved source messages instead of stale saved order',async()=>{
+ const f=fixture(),late=await saved(f,3,4),early=await saved(f,1,2);
+ await f.e.edit(late.id,{title:'Поздняя по старому порядку',text:'LATE_SOURCE'});await f.e.edit(early.id,{title:'Ранняя по старому порядку',text:'EARLY_SOURCE'});
+ f.c.chat.push(...f.c.chat.splice(0,3));const m=await f.e.memory();assert.ok(m.text.indexOf('LATE_SOURCE')<m.text.indexOf('EARLY_SOURCE'));
+});

@@ -12,8 +12,13 @@ export function memoryViewState(entries,memory,selectedIds=[]) {
         const note=gate==='disabled'?'Выбрана для памяти, но внедрение глобально отключено.':gate==='blocked'?memory.reason??'Блок памяти не внедряется.':covering.length?`Отдельно не внедряется. ${covering.map(a=>a.title).join('; ')}.`:'';
         return [entry.id,{effective,label,kind:effective?'active':covering.length?'arc':'archive',gate,note,selectedForArc:entry.type==='summary'&&selected.has(entry.id),covering}];
     }));
-    return {byId,current:entries.filter(e=>transmitted.has(e.id)),archived:entries.filter(e=>!transmitted.has(e.id)),actualText:memory.enabled&&!memory.blocked?memory.text??'':'',candidateText:memory.text??''};
+    return {byId,current:(memory.entries??[]).filter(e=>transmitted.has(e.id)),archived:entries.filter(e=>!transmitted.has(e.id)),actualText:memory.enabled&&!memory.blocked?memory.text??'':'',candidateText:memory.text??''};
 }
-export function filterArchive(entries,state,filter='all') {
-    return entries.filter(e=>filter==='active'?state.byId.get(e.id)?.effective:filter==='inactive'?!state.byId.get(e.id)?.effective:true);
+export function entryDisplayTitle(entry,allEntries) {
+    const type=entry.type==='arc'?'Арка':'Сводка';
+    return new RegExp(`^${type}\\s*№\\s*\\d+`,'i').test(entry.title)?entry.title:`${type} №${allEntries.filter(e=>e.type===entry.type).findIndex(e=>e.id===entry.id)+1} — ${entry.title}`;
+}
+export function filterArchive(entries,state,filter='all',query='') {
+    const needle=query.trim().toLocaleLowerCase();
+    return entries.filter(e=>(filter==='active'?state.byId.get(e.id)?.effective:filter==='inactive'?!state.byId.get(e.id)?.effective:true)&&(!needle||`${e.title}\n${e.text??''}`.toLocaleLowerCase().includes(needle)));
 }

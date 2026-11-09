@@ -1,4 +1,5 @@
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
+import {narrativeOrder} from './order.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
@@ -243,11 +244,12 @@ export class Engine {
     }
     async memory() {
         const s=this.session(),settings=this.settings(),archive=this.archive(s),entries=archive.entries;
-        const text=memoryText(entries,settings),tokens=await this.host.count(text);this.assert(s);
+        const ordered=narrativeOrder(memoryEntries(entries),entries,s.chat);
+        const text=memoryText(entries,settings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
         const conflicts=memoryConflicts(entries),enabled=settings.enabled&&settings.inject;
         const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
         const blocked=enabled&&(!!archive.pending||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        return {text,tokens,conflicts,blocked,enabled,entries:memoryEntries(entries),reason:archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':conflicts.length?'Активные арки пересекаются. Отключите одну из них.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+        return {text,tokens,conflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':conflicts.length?'Активные арки пересекаются. Отключите одну из них.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     refreshMemory() {
         const epoch=++this.memoryEpoch;
@@ -261,5 +263,6 @@ export class Engine {
         })();
         return this.memoryTask;
     }
-    entries() {return chronological(this.archive().entries);}
+    orderEntries(entries=null) {const s=this.session(),all=this.archive(s).entries;return narrativeOrder(entries??chronological(all),all,s.chat);}
+    entries() {return this.orderEntries().entries;}
 }

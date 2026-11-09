@@ -63,8 +63,8 @@ export function memoryConflicts(entries) {
     }
     return conflicts;
 }
-export function memoryText(entries,settings) {
-    const active=memoryEntries(entries);
+export function memoryText(entries,settings,orderedEntries=null) {
+    const active=orderedEntries??memoryEntries(entries);
     if(!active.length)return '';
     return [settings.pastNoteEnabled?settings.pastNote:'',...active.map(e=>`[${e.type==='arc'?'Сюжетная арка':'Сводка'}: ${e.title}]\n${e.text}`)].filter(Boolean).join('\n\n');
 }

@@ -41,3 +41,10 @@ test('arc status retains the existing visible arc number after earlier arcs were
  const a=summary('a'),c={...arc('arc',['a','b']),title:'Арка №7 — Продолжение'};
  assert.equal(view.memoryViewState([a,c],memory([c]),[]).byId.get('a').label,'Входит в арку №7');
 });
+test('search matches titles and full texts without changing the archive',()=>{
+ const a={...summary('a'),title:'Библиотека',text:'Скрытая важная деталь'},b={...summary('b'),title:'Другая сцена',text:'Иное'},entries=[a,b],r=view.memoryViewState(entries,memory(entries),[]);
+ assert.deepEqual(view.filterArchive(entries,r,'all','ВАЖНАЯ').map(e=>e.id),['a']);assert.deepEqual(view.filterArchive(entries,r,'all','библио').map(e=>e.id),['a']);
+});
+test('current-memory list uses the exact order of the engine snapshot',()=>{
+ const a=summary('a'),b=summary('b');assert.deepEqual(view.memoryViewState([a,b],memory([b,a]),[]).current.map(e=>e.id),['b','a']);
+});

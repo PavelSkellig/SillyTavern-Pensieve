@@ -109,3 +109,31 @@
     .pensieve .pv-entry-card > .pv-row {display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
     .pensieve .pv-entry-card > .pv-row button {font-size:12px;padding:6px;line-height:1.4}
 }
+
+/* Archive workspace and compact native message actions. */
+.pensieve .pv-tabs button[aria-current="page"] {background:var(--pv-active);border-color:var(--pv-bronze)}
+.pensieve .pv-archive-tools {display:grid;grid-template-columns:minmax(0,2fr) minmax(120px,1fr);gap:10px;align-items:end}
+.pensieve .pv-archive-tools label {font-size:12px;margin:5px 0 8px}
+.pensieve .pv-archive-results {margin-top:10px}
+.pensieve .pv-arc-selection > small {display:block;margin:4px 0;color:var(--pv-muted)}
+.pensieve .pv-arc-selection [data-selected-id] {display:flex;flex-wrap:nowrap;gap:5px}
+.pensieve .pv-arc-selection [data-selected-id] > span {flex:1;overflow-wrap:anywhere;font-size:13px}
+.pensieve .pv-arc-selection [data-selected-id] > button {flex:0 0 36px;width:36px;min-height:36px;padding:4px}
+.pensieve .pv-setting-group {border:0;border-top:1px solid var(--pv-line);padding:6px 0;margin:14px 0;min-width:0}
+.pensieve .pv-setting-group legend {font-family:Georgia,serif;color:var(--pv-bronze);font-size:16px;padding:0 8px 0 0}
+.pensieve button {touch-action:manipulation}
+#chat .pv-range-actions {display:inline-flex;align-items:center;flex:0 0 auto;gap:2px;vertical-align:middle;white-space:nowrap;box-sizing:border-box}
+#chat .pv-range-actions[hidden] {display:none}
+#chat .pv-range-actions .pv-message-action {display:inline-flex!important;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;min-width:32px;min-height:32px;max-width:32px;max-height:32px;padding:0;margin:0;border:0;border-radius:5px;background:transparent;color:#b79c73;box-sizing:border-box;touch-action:manipulation;opacity:.85}
+#chat .pv-message-action svg {display:block;flex:none;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+#chat .pv-message-action[aria-pressed="true"] {background:#b79c7329;opacity:1}
+#chat .pv-message-action:focus-visible {outline:1px solid #b79c73;outline-offset:1px}
+@media(max-width:600px){
+    #pensieve-panel {width:100%;max-width:100%;height:100dvh;max-height:100dvh;margin:0;inset:0;border-radius:0;border:0}
+    #pensieve-panel > .pv-header {padding-top:max(8px,env(safe-area-inset-top));padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+    #pensieve-panel > .pv-content {padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right));overflow-x:hidden}
+    #pensieve-panel > .pv-footer {padding-bottom:max(8px,env(safe-area-inset-bottom))}
+    .pensieve .pv-archive-tools {gap:7px;grid-template-columns:minmax(0,1fr) minmax(100px,.65fr)}
+    .pensieve input:not([type="checkbox"]),.pensieve select {font-size:16px;padding:8px}
+    #chat .pv-range-actions .pv-message-action {flex-basis:36px;width:36px;height:36px;min-width:36px;min-height:36px;max-width:36px;max-height:36px}
+}

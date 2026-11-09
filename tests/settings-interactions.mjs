@@ -63,7 +63,7 @@ try {
     assert.equal(await header.getAttribute('aria-expanded'),'true','action buttons must not collapse drawer');
     assert.equal(await page.locator('#pensieve-panel').count(),1,'one shared main window');
     if(id==='pensieve-settings-summary')assert.ok(await panel.locator('[name="rangeStart"]').count());
-    if(id==='pensieve-settings-arc')assert.ok(await panel.getByText('Для арки выбрано:',{exact:false}).count());
+    if(id==='pensieve-settings-arc')assert.ok(await panel.getByText('Отметьте сводки флажками, чтобы создать арку.',{exact:true}).count());
     const box=await panel.evaluate(n=>({scroll:n.scrollWidth,client:n.clientWidth}));assert.ok(box.scroll<=box.client+1);
     const scroller=panel.locator('.pv-content');await scroller.evaluate(n=>n.scrollTop=n.scrollHeight);
     await panel.getByRole('button',{name:'Закрыть',exact:true}).tap();await panel.waitFor({state:'hidden'});
