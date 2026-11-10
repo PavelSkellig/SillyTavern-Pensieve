@@ -192,3 +192,19 @@ test('linked children cannot be deleted silently, while deleting a volume retain
  const f=fixture(),pair=await chapters(f),draft=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(draft,{title:'V',text:'VOLUME'});
  await assert.rejects(()=>f.e.deleteEntry(pair[0].id),/связан|входит/i);const before=f.e.archive().entries.filter(e=>e.id!==v.id).map(e=>[e.id,e.text]);await f.e.deleteEntry(v.id);assert.deepEqual(f.e.archive().entries.map(e=>[e.id,e.text]),before);assert.ok(f.e.archive().entries.every(e=>!e.active));
 });
+test('deleting an active volume cannot resurrect a regenerated chapter with a latent active flag',async()=>{
+ const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(d,{title:'Том №1',text:'VOLUME'});
+ const regen=await f.e.generateArc(pair[0].summaryIds,{replaceId:pair[0].id});await f.e.saveDraft(regen,{title:'Глава №1',text:'UPDATED'});assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[v.id]);
+ await f.e.deleteEntry(v.id);assert.deepEqual((await f.e.memory()).entries,[]);assert.equal(f.e.archive().entries.length,6);
+});
+test('deleting an inactive volume preserves chapters explicitly activated by the user',async()=>{
+ const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(d,{title:'Том №1',text:'VOLUME'});await f.e.toggle(v.id,false);await f.e.toggle(pair[0].id,true);await f.e.deleteEntry(v.id);assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[pair[0].id]);
+});
+test('confirmed child deletion can unlink a source from a three-child parent without losing parent text or other children',async()=>{
+ const f=fixture();f.c.chat.push(...Array.from({length:4},(_,i)=>({name:'Test',mes:'Added '+i,is_user:true,is_system:false,extra:{}})));const pair=await chapters(f),x=await saved(f,8,9),y=await saved(f,10,11),draft=await f.e.generateArc([x.id,y.id]),third=await f.e.saveDraft(draft,{title:'Глава №3',text:'THIRD'}),vd=await f.e.generateVolume([...pair.map(e=>e.id),third.id]),v=await f.e.saveDraft(vd,{title:'Том №1',text:'UNCHANGED VOLUME'});
+ await f.e.deleteEntry(pair[0].id,false,{unlink:true});const parent=f.e.archive().entries.find(e=>e.id===v.id);assert.equal(parent.text,'UNCHANGED VOLUME');assert.equal(parent.needsReview,true);assert.deepEqual(parent.chapterIds,[pair[1].id,third.id]);assert.equal(f.e.archive().entries.filter(e=>e.type==='summary').length,6);
+});
+test('new automatic volume numbers do not reuse an existing visible number after deletion',async()=>{
+ const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(d,{title:'Том №2 — Сохранённый',text:'VOLUME'});await f.e.toggle(v.id,false);
+ const next=await f.e.generateVolume(pair.map(e=>e.id));assert.equal(next.title,'Том №3');
+});

@@ -329,7 +329,7 @@ export class UI {
     }
     archiveResults(archive,results) {
         const ordered=this.e.orderEntries(chronological(archive.entries.filter(e=>e.type===this.archiveTab)));
-        const entries=filterArchive(ordered.entries,this.viewState,this.archiveFilter,this.archiveSearch);
+        const entries=filterArchive(ordered.entries,this.viewState,this.archiveFilter,this.archiveSearch,archive.entries);
         results.replaceChildren(el('small',{},`Найдено: ${entries.length}`));
         for(const warning of ordered.warnings)results.append(el('p',{class:'pv-warning'},warning));
         if(!entries.length)results.append(el('p',{class:'pv-empty'},archive.entries.length?'Нет записей, подходящих под поиск и фильтр.':'Здесь появятся подтверждённые воспоминания.'));
@@ -372,11 +372,12 @@ export class UI {
         const toggle=iconButton(e.active?'Убрать из памяти':'Добавить в память',()=>this.act(()=>{this.e.assert(session);return this.e.toggle(e.id,!e.active);}),e.active?'fa-trash-can':'fa-plus');toggle.disabled=!e.active&&state.covering.length>0;
         const actions=row(iconButton('Открыть',()=>this.editEntry(e,false),'fa-book-open'),iconButton('Изменить',()=>this.editEntry(e,true),'fa-pen'),toggle);actions.classList.add('pv-entry-actions');if(activeView)card.append(actions);else details.append(actions);
         details.append(row(button('Скопировать',()=>this.act(()=>copy(e.text))),button('Экспорт .txt',()=>download(`${e.type}-${e.id}.txt`,`${e.title}\n\n${e.text}`,'text/plain')),button('Перегенерировать',()=>this.act(()=>this.regenerateEntry(e))),button('Удалить',()=>this.act(async()=>{
-            if(parents.length){this.textDialog('Связанные записи',`Эта запись входит в: ${parents.map(p=>entryDisplayTitle(p,archive.entries)).join('; ')}. Сначала удалите родительскую запись. Дочерние тексты при этом остаются в архиве.`);return;}
-            if(!await this.confirm('Удаление записи',`Удалить «${entryDisplayTitle(e,archive.entries)}»? Дочерние записи и история чата останутся. Для исходников эпизода сначала используйте восстановление.`))return;
-            const restore=e.type==='arc'?await this.confirm('Связанные эпизоды','Вернуть исходные эпизоды главы в активную память?'):false;
+            if(parents.some(p=>childrenIds(p).length<3)){this.textDialog('Связанные записи',`Эта запись входит в: ${parents.map(p=>entryDisplayTitle(p,archive.entries)).join('; ')}. После удаления у каждого родителя должны оставаться минимум две исходные записи. Сохранённые родительские тексты не изменены; сначала пересоберите или удалите родителя.`);return;}
+            const warning=parents.length?` Связи с ${parents.map(p=>entryDisplayTitle(p,archive.entries)).join('; ')} будут убраны. Их тексты сохранятся и получат отметку «Требует проверки».`:'';
+            if(!await this.confirm('Удаление записи',`Удалить «${entryDisplayTitle(e,archive.entries)}»? Дочерние записи и история чата останутся. Для исходников эпизода сначала используйте восстановление.${warning}`,session))return;
+            const restore=e.type==='arc'?await this.confirm('Связанные эпизоды','Вернуть исходные эпизоды главы в активную память?',session):false;
             this.e.assert(session);
-            await this.e.deleteEntry(e.id,restore);
+            await this.e.deleteEntry(e.id,restore,{unlink:parents.length>0});
         }))));
         if(e.type==='summary')details.append(button('Восстановить исходные сообщения',()=>this.act(async()=>{
             if(!await this.confirm('Восстановление','Вернуть в контекст исходники, исключённые этим эпизодом, и деактивировать эпизод? Ранее скрытые сообщения останутся скрытыми.'))return;
@@ -456,9 +457,10 @@ export class UI {
         archiveGroup.append(el('p',{class:'pv-muted'},'Резервное копирование'));
         if(archive){archiveGroup.append(el('p',{class:'pv-muted'},`Архив текущего чата: ${(bytes(archive)/1024).toFixed(1)} KiB. Резервная копия содержит личные тексты — храните её у себя.`));
         archiveGroup.append(row(button('Экспорт архива JSON',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2))),button('Импорт архива JSON',()=>this.act(async()=>{
-            const f=await readFile('.json,application/json');if(!f)return;const incoming=parseArchive(f.text);
-            const mode=await this.importMode();if(!mode)return;
-            if(mode==='replace'&&!await this.confirm('Замена архива','Заменить текущий архив? Сначала рекомендуется экспорт. Источники импорт не скрывает.'))return;
+            const session=this.e.session(),f=await readFile('.json,application/json');if(!f)return;this.e.assert(session);const incoming=parseArchive(f.text);
+            const mode=await this.importMode(session);if(!mode)return;this.e.assert(session);
+            if(mode==='replace'&&!await this.confirm('Замена архива','Заменить текущий архив? Сначала рекомендуется экспорт. Источники импорт не скрывает.',session))return;
+            this.e.assert(session);
             await this.e.importArchive(incoming,mode);this.showNotice('Архив импортирован. Состояние исходных сообщений не менялось.');
         }))));
         }else archiveGroup.append(el('p',{class:'pv-muted'},'Откройте сохранённый чат для экспорта, импорта и восстановления его архива. Общие настройки и промпты доступны без чата.'));
@@ -472,8 +474,11 @@ export class UI {
         const recovery=el('details',{class:'pv-recovery'});recovery.append(el('summary',{},'Восстановление'));archiveGroup.append(recovery);
         recovery.append(row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button('Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
         recovery.append(button('Восстановить все исходники',()=>this.act(async()=>{
-            if(!await this.confirm('Восстановление всех исходников','Вернуть исключённые этим расширением сообщения и отключить всю память текущего чата?'))return;
-            let issues=0;for(const e of [...this.e.archive().entries])if(e.type==='summary'){const r=await this.e.restore(e.id);issues+=r.issues.length;}
+            const session=this.e.session();
+            if(!await this.confirm('Восстановление всех исходников','Вернуть исключённые этим расширением сообщения и отключить всю память текущего чата?',session))return;
+            this.e.assert(session);
+            let issues=0;for(const e of [...this.e.archive(session).entries])if(e.type==='summary'){this.e.assert(session);const r=await this.e.restore(e.id);issues+=r.issues.length;}
+            this.e.assert(session);
             await this.e.disableAll();this.showNotice(issues?`Не удалось надёжно восстановить источники: ${issues}. Их состояние сохранено.`:'Исходники восстановлены. Архив сохранён.');
         })));
     }
@@ -482,14 +487,14 @@ export class UI {
         if(chatScoped)dialog.dataset.chatScoped='true';
         const head=el('header',{class:'pv-header'}),close=button('×',()=>{if(dialog.dispatchEvent(new Event('cancel',{cancelable:true})))dialog.close();});close.classList.add('pv-icon');close.setAttribute('aria-label','Закрыть окно');head.append(el('h2',{},title),close);dialog.setAttribute('aria-label',title);const body=el('div',{class:'pv-content'});dialog.append(head,body);document.body.append(dialog);return {dialog,body};
     }
-    confirm(title,message) {
-        return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title);body.append(el('p',{},message),row(button('Подтвердить',()=>{dialog.returnValue='yes';dialog.close();},true),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const yes=dialog.returnValue==='yes';dialog.remove();resolve(yes);};dialog.showModal();});
+    confirm(title,message,session=null) {
+        return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title,!!session);body.append(el('p',{},message),row(button('Подтвердить',()=>{dialog.returnValue='yes';dialog.close();},true),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const yes=dialog.returnValue==='yes';dialog.remove();resolve(yes);};dialog.showModal();});
     }
     askText(title,value) {
         return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title),input=el('input',{value,'aria-label':title});body.append(input,row(button('Сохранить',()=>{dialog.returnValue='yes';dialog.close();},true),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const result=dialog.returnValue==='yes'?input.value.trim():null;dialog.remove();resolve(result);};dialog.showModal();input.focus();});
     }
-    importMode() {
-        return new Promise(resolve=>{const {dialog,body}=this.makeDialog('Импорт архива');body.append(el('p',{},'Объединить с текущим архивом или заменить его? Импорт не исключает сообщения.'),row(button('Объединить',()=>{dialog.returnValue='merge';dialog.close();},true),button('Заменить',()=>{dialog.returnValue='replace';dialog.close();}),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const mode=['merge','replace'].includes(dialog.returnValue)?dialog.returnValue:null;dialog.remove();resolve(mode);};dialog.showModal();});
+    importMode(session=null) {
+        return new Promise(resolve=>{const {dialog,body}=this.makeDialog('Импорт архива',!!session);body.append(el('p',{},'Объединить с текущим архивом или заменить его? Импорт не исключает сообщения.'),row(button('Объединить',()=>{dialog.returnValue='merge';dialog.close();},true),button('Заменить',()=>{dialog.returnValue='replace';dialog.close();}),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const mode=['merge','replace'].includes(dialog.returnValue)?dialog.returnValue:null;dialog.remove();resolve(mode);};dialog.showModal();});
     }
     textDialog(title,text) {const {dialog,body}=this.makeDialog(title);const area=el('textarea',{readonly:'true','aria-label':title},text);body.append(area,row(button('Скопировать',()=>this.act(()=>copy(text))),button('Закрыть',()=>dialog.close())));dialog.onclose=()=>dialog.remove();dialog.showModal();}
     async generating(fn) {
@@ -526,9 +531,11 @@ export class UI {
         if(editable)body.append(button('Сохранить изменения',async()=>{try{this.e.assert(session);await this.e.edit(entry.id,{title:title.value,text:text.value});dialog.close();await this.refresh(true);}catch(error){status.textContent=error.message;}},true));
         if(entry.history.length) {
             const versions=el('select',{'aria-label':'Предыдущая версия'});entry.history.forEach((h,i)=>versions.append(el('option',{value:i},`Версия ${h.version} — ${h.title}`)));
-            body.append(field('Предыдущие версии',versions),row(button('Посмотреть версию',()=>{const h=entry.history[Number(versions.value)];this.textDialog(`Версия ${h.version}`,h.text);}),button('Восстановить версию',async()=>{if(!await this.confirm('Восстановление версии','Сохранить выбранную предыдущую версию как новую редакцию?'))return;const h=entry.history[Number(versions.value)];try{await this.e.edit(entry.id,{title:h.title,text:h.text});dialog.close();await this.refresh(true);}catch(error){status.textContent=error.message;}})));
+            const historyActions=row(button('Посмотреть версию',()=>{const h=entry.history[Number(versions.value)];this.textDialog(`Версия ${h.version}`,h.text);}));
+            if(editable)historyActions.append(button('Восстановить версию',async()=>{if(!await this.confirm('Восстановление версии','Сохранить выбранную предыдущую версию как новую редакцию?',session))return;const h=entry.history[Number(versions.value)];try{this.e.assert(session);await this.e.edit(entry.id,{title:h.title,text:h.text});dialog.close();await this.refresh(true);}catch(error){status.textContent=error.message;}}));
+            body.append(field('Предыдущие версии',versions),historyActions);
         }
-        if(entry.needsReview)body.append(button('Проверено — снять отметку',()=>this.act(async()=>{await this.e.change(a=>a.entries.find(e=>e.id===entry.id).needsReview=false);dialog.close();})));
+        if(editable&&entry.needsReview)body.append(button('Проверено — снять отметку',()=>this.act(async()=>{this.e.assert(session);await this.e.change(a=>a.entries.find(e=>e.id===entry.id).needsReview=false);dialog.close();})));
         body.append(row(button('Скопировать',()=>this.act(()=>copy(text.value))),button('Закрыть',()=>dialog.close())));dialog.onclose=()=>{dialog.remove();if(this.editor===dialog)this.editor=null;};dialog.showModal();
     }
     showContents(entry) {

@@ -27,3 +27,7 @@ export function displayTitle(entry,allEntries) {
     return matched?`${level.name} №${matched[1]}${matched[2]}`:`${level.name} №${entryNumber(entry,allEntries)} — ${entry.title}`;
 }
 export const relationLabel=(parent,allEntries)=>`Входит в ${parent.type==='volume'?'том':'главу'} №${entryNumber(parent,allEntries)}`;
+export function nextNumber(type,allEntries) {
+    let highest=0;for(const entry of allEntries.filter(e=>e.type===type)){const number=Number(entryNumber(entry,allEntries));if(Number.isSafeInteger(number)&&number>highest)highest=number;}
+    return highest+1;
+}

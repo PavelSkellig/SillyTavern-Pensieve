@@ -1,6 +1,6 @@
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
 import {narrativeOrder} from './order.js';
-import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
+import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
@@ -71,7 +71,7 @@ export class Engine {
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(this.archive(s).entries,range);
             if(overlaps.length&&!allowOverlap)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
             if(replaceId&&!overlaps.some(e=>e.id===replaceId))throw Error('Запись для замены не связана с диапазоном.');
-            return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Эпизод №${this.archive(s).entries.filter(e=>e.type==='summary').length+1}`,order:start});
+            return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Эпизод №${nextNumber('summary',this.archive(s).entries)}`,order:start});
         });
     }
     generateArc(ids,options={}) {return this.generateCollection('arc',ids,options);}
@@ -85,7 +85,7 @@ export class Engine {
             if(chosen.some(e=>e?.type!==LEVELS[type].sourceType))throw Error('Выбран неверный уровень или отсутствующая исходная запись.');
             if(replaceId&&entries.find(e=>e.id===replaceId)?.type!==type)throw Error('Тип заменяемой записи не совпадает.');
             const links=type==='volume'?{chapterIds:[...ids],summaryIds:[]}:{summaryIds:[...ids]};
-            return this.generateDraft({session:s,type,...links,sourceVersions:chosen.map(e=>e.version),replaceId,title:`${LEVELS[type].name} №${entries.filter(e=>e.type===type).length+1}`,order:Math.min(...chosen.map(e=>e.order))});
+            return this.generateDraft({session:s,type,...links,sourceVersions:chosen.map(e=>e.version),replaceId,title:`${LEVELS[type].name} №${nextNumber(type,entries)}`,order:Math.min(...chosen.map(e=>e.order))});
         });
     }
     async regenerate(draft) {return this.run(()=>this.generateDraft(draft));}
@@ -236,14 +236,17 @@ export class Engine {
     edit(id,patch) {return this.change(a=>reviseEntry(a.entries,id,patch));}
     toggle(id,active) {return this.change(a=>{const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');if(e.type==='volume'){const covered=hierarchyIndex(a.entries).descendants(e);for(const child of a.entries)if(covered.has(child.id))child.active=false;}e.active=active;});}
     disableAll() {return this.change(a=>a.entries.forEach(e=>e.active=false));}
-    deleteEntry(id,restoreSummaries=false) {
+    deleteEntry(id,restoreSummaries=false,{unlink=false}={}) {
         return this.change((a,s)=>{
             const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');
-            if(a.entries.some(parent=>childrenIds(parent).includes(id)))throw Error('Запись входит в связанную главу или том. Сначала удалите родительскую запись; её содержимое останется в архиве.');
+            const index=hierarchyIndex(a.entries),parents=index.parents.get(id)??[];
+            if(parents.length&&(!unlink||parents.some(p=>childrenIds(p).length<3)))throw Error('Запись входит в связанную главу или том. У каждого родителя после удаления должны остаться минимум две исходные записи; требуется явное подтверждение отвязывания.');
             if(e.type==='summary') {
-                if(a.entries.some(x=>x.summaryIds.includes(id)))throw Error('Эпизод связан с главой. Сначала удалите соответствующие главы.');
                 if(s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.includes(id)))throw Error('Сначала восстановите исходники эпизода. Для изменённых источников верните исходный ответ и повторите восстановление.');
             }
+            if(e.type!=='summary'&&(e.active||index.ancestors(e).some(p=>p.active))){const covered=index.descendants(e);for(const source of a.entries)if(covered.has(source.id))source.active=false;}
+            for(const parent of index.ancestors(e))parent.needsReview=true;
+            for(const parent of parents){const key=parent.type==='volume'?'chapterIds':'summaryIds';parent[key]=parent[key].filter(sourceId=>sourceId!==id);}
             if(e.type!=='summary'&&restoreSummaries)for(const source of a.entries)if(childrenIds(e).includes(source.id))source.active=true;
             a.entries=a.entries.filter(x=>x.id!==id);
         });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as core from '../src/core.js';
 import {narrativeOrder} from '../src/order.js';
-import {memoryViewState,entryDisplayTitle} from '../src/view-state.js';
+import {memoryViewState,entryDisplayTitle,filterArchive} from '../src/view-state.js';
 const make=(id,type,order,children=[])=>({id,type,title:id,text:'TEXT_'+id,order,active:true,version:1,history:[],createdAt:'2026-11-10',updatedAt:'2026-11-10',sources:type==='summary'?[{id:'m'+order,index:order,hash:'a'.repeat(32),previousHidden:false}]:[],summaryIds:type==='arc'?children:[],...(type==='volume'?{chapterIds:children}:{}),needsReview:false});
 const fixture=()=>[make('s1','summary',0),make('s2','summary',2),make('s3','summary',4),make('s4','summary',6),make('a1','arc',0,['s1','s2']),make('a2','arc',4,['s3','s4']),make('v1','volume',0,['a1','a2']),make('new','summary',8)];
 
@@ -44,4 +44,8 @@ test('effective state and hierarchy membership stay independent at every level',
  assert.equal(state.byId.get('a1').label,'В архиве');assert.equal(state.byId.get('s1').label,'В архиве');assert.equal(state.byId.get('v1').label,'Активна');
  assert.deepEqual(state.byId.get('a1').parents.map(e=>e.id),['v1']);assert.deepEqual(state.byId.get('s1').parents.map(e=>e.id),['a1']);assert.deepEqual(state.byId.get('s1').covering.map(e=>e.id),['a1','v1']);assert.equal(state.byId.get('a2').selectedForVolume,true);
  assert.ok(core.memoryText(entries,core.defaults()).includes('[Том: v1]'));
+});
+test('legacy records can be found by the new visible episode/chapter name without rewriting titles',()=>{
+ const entries=fixture();entries[0].title='Сводка №7 — Тайна';entries[4].title='Арка №9';const state=memoryViewState(entries,{enabled:true,blocked:false,entries:[],text:''});
+ assert.deepEqual(filterArchive(entries,state,'all','Эпизод №7').map(e=>e.id),['s1']);assert.deepEqual(filterArchive(entries,state,'all','Глава №9').map(e=>e.id),['a1']);assert.equal(entries[0].title,'Сводка №7 — Тайна');
 });

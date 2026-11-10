@@ -17,7 +17,7 @@ export function memoryViewState(entries,memory,selectedIds=[]) {
 export function entryDisplayTitle(entry,allEntries) {
     return displayTitle(entry,allEntries);
 }
-export function filterArchive(entries,state,filter='all',query='') {
+export function filterArchive(entries,state,filter='all',query='',allEntries=entries) {
     const needle=query.trim().toLocaleLowerCase();
-    return entries.filter(e=>(filter==='active'?state.byId.get(e.id)?.effective:filter==='inactive'?!state.byId.get(e.id)?.effective:true)&&(!needle||`${e.title}\n${e.text??''}`.toLocaleLowerCase().includes(needle)));
+    return entries.filter(e=>(filter==='active'?state.byId.get(e.id)?.effective:filter==='inactive'?!state.byId.get(e.id)?.effective:true)&&(!needle||`${displayTitle(e,allEntries)}\n${e.title}\n${e.text??''}`.toLocaleLowerCase().includes(needle)));
 }
