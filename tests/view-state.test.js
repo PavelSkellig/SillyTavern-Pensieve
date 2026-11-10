@@ -19,7 +19,7 @@ test('overflow blocks the complete memory block instead of inventing a subset',(
 });
 test('an active arc identifies suppressed sources even if their active flag is true',()=>{
  const a=summary('a'),b=summary('b',false),c=arc('arc',[a.id,b.id]),r=view.memoryViewState([a,b,c],memory([c]),[]);
- assert.equal(r.byId.get('a').label,'Входит в арку №1');assert.equal(r.byId.get('b').label,'Входит в арку №1');assert.deepEqual(r.current.map(e=>e.id),['arc']);assert.equal(r.archived.length,2);
+ assert.equal(r.byId.get('a').label,'В архиве');assert.deepEqual(r.byId.get('a').parents.map(e=>e.id),['arc']);assert.equal(r.byId.get('b').label,'В архиве');assert.deepEqual(r.current.map(e=>e.id),['arc']);assert.equal(r.archived.length,2);
 });
 test('inactive arcs do not suppress a summary restored into active memory',()=>{
  const a=summary('a'),c=arc('arc',['a','b'],false),r=view.memoryViewState([a,c],memory([a]),[]);
@@ -39,7 +39,7 @@ test('projection is read-only and accepts an empty archive',()=>{
 });
 test('arc status retains the existing visible arc number after earlier arcs were removed',()=>{
  const a=summary('a'),c={...arc('arc',['a','b']),title:'Арка №7 — Продолжение'};
- assert.equal(view.memoryViewState([a,c],memory([c]),[]).byId.get('a').label,'Входит в арку №7');
+ const state=view.memoryViewState([a,c],memory([c]),[]).byId.get('a');assert.equal(state.label,'В архиве');assert.equal(state.parents[0].title,'Арка №7 — Продолжение');
 });
 test('search matches titles and full texts without changing the archive',()=>{
  const a={...summary('a'),title:'Библиотека',text:'Скрытая важная деталь'},b={...summary('b'),title:'Другая сцена',text:'Иное'},entries=[a,b],r=view.memoryViewState(entries,memory(entries),[]);

@@ -1,3 +1,4 @@
+import {childrenIds} from './hierarchy.js';
 /** Resolve narrative positions from current source UUIDs. Never parse story dates or write metadata. */
 export function narrativeOrder(entries,allEntries,chat) {
     const sourceIndices=new Map(),byId=new Map(),ranges=new Map();
@@ -11,9 +12,9 @@ export function narrativeOrder(entries,allEntries,chat) {
         if(ranges.has(entry.id))return ranges.get(entry.id);
         ranges.set(entry.id,null); // also prevents cycles in malformed legacy links
         let positions;
-        if(entry.type==='arc') {
-            if(!Array.isArray(entry.summaryIds)||!entry.summaryIds.length)return null;
-            const children=entry.summaryIds.map(id=>resolve(byId.get(id)));
+        if(entry.type==='arc'||entry.type==='volume') {
+            const ids=childrenIds(entry);if(!Array.isArray(ids)||!ids.length)return null;
+            const children=ids.map(id=>resolve(byId.get(id)));
             if(children.some(range=>!range))return null;
             positions=children.flatMap(range=>[range.start,range.end]);
         } else {

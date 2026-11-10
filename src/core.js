@@ -1,4 +1,6 @@
+import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
 export const KEY = 'pensieve';
+export const VOLUME_PROMPT='Объедини выбранные главы ролевой истории в единый том долгосрочной памяти. Сохрани последовательность событий, причины и последствия, развитие персонажей и отношений, важные факты, тайны, решения, обещания, предметы и незавершённые сюжетные линии. Покажи актуальное состояние истории на конец тома. Удали повторения, сохраняя значимые сведения. Не копируй главы механически, не придумывай событий и дат, не меняй хронологию. Используй только предоставленные тексты глав.';
 export const PROMPT_KEY = 'pensieve_active_memory_v1';
 export const MAX_ARCHIVE_BYTES = 20 * 1024 * 1024;
 export const WARN_ARCHIVE_BYTES = 5 * 1024 * 1024;
@@ -9,7 +11,7 @@ export const defaults = () => ({
     tokenLimit: 6000, position: 1, depth: 4, theme: 'dark',
     pastNoteEnabled: true,
     pastNote: 'Ниже приведены сведения о ранее произошедших событиях. Учитывай их для последовательности истории и поведения персонажей, но не пересказывай прошлое без необходимости и не разыгрывай завершённые события повторно.',
-    prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:'',history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:'',history:[]}] } },
+    prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:'',history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:'',history:[]}] },volume:{selected:'default',presets:[{id:'default',name:'Основной',text:VOLUME_PROMPT,history:[]}]} },
 });
 export const emptyArchive = owner => ({version:1,owner,revision:0,entries:[],pending:null});
 
@@ -51,29 +53,30 @@ export function findOverlaps(entries, range) {
 }
 export const chronological = entries => [...entries].sort((a,b)=>a.order-b.order||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
 export function memoryEntries(entries) {
-    const active=entries.filter(e=>e.active), replaced=new Set(active.filter(e=>e.type==='arc').flatMap(e=>e.summaryIds));
-    return chronological(active.filter(e=>e.type==='arc'||!replaced.has(e.id)));
+    const index=hierarchyIndex(entries),active=entries.filter(e=>e.active),replaced=new Set(active.flatMap(e=>[...index.descendants(e)]));
+    return chronological(active.filter(e=>!replaced.has(e.id)));
 }
 export function memoryConflicts(entries) {
-    const arcs=entries.filter(e=>e.active&&e.type==='arc'), conflicts=[];
-    const byId=new Map(entries.map(e=>[e.id,e]));
-    const coverage=e=>new Set(e.summaryIds.flatMap(id=>[id,...(byId.get(id)?.sources??[]).map(s=>s.id||s.hash)]));
-    for(let i=0;i<arcs.length;i++) for(let j=i+1;j<arcs.length;j++) {
-        const ids=coverage(arcs[i]); if([...coverage(arcs[j])].some(id=>ids.has(id))) conflicts.push([arcs[i].id,arcs[j].id]);
+    const active=memoryEntries(entries),index=hierarchyIndex(entries),conflicts=[];
+    const coverage=e=>{const ids=new Set([e.id,...index.descendants(e)]),keys=new Set([...ids].map(id=>'record:'+id));for(const id of ids)for(const source of index.byId.get(id)?.sources??[])keys.add('source:'+(source.id||source.hash));return keys;};
+    const covered=new Map(active.map(e=>[e.id,coverage(e)]));
+    for(let i=0;i<active.length;i++) for(let j=i+1;j<active.length;j++) {
+        if(active[i].type==='summary'&&active[j].type==='summary')continue;
+        const ids=covered.get(active[i].id);if([...covered.get(active[j].id)].some(id=>ids.has(id)))conflicts.push([active[i].id,active[j].id]);
     }
     return conflicts;
 }
 export function memoryText(entries,settings,orderedEntries=null) {
     const active=orderedEntries??memoryEntries(entries);
     if(!active.length)return '';
-    return [settings.pastNoteEnabled?settings.pastNote:'',...active.map(e=>`[${e.type==='arc'?'Сюжетная арка':'Сводка'}: ${e.title}]\n${e.text}`)].filter(Boolean).join('\n\n');
+    return [settings.pastNoteEnabled?settings.pastNote:'',...active.map(e=>`[${LEVELS[e.type].name}: ${e.title}]\n${e.text}`)].filter(Boolean).join('\n\n');
 }
 export function reviseEntry(entries,id,patch) {
     const entry=entries.find(e=>e.id===id); if(!entry)throw Error('Запись не найдена.');
     if(typeof patch.text!=='string'||!patch.text.trim()||typeof patch.title!=='string'||!patch.title.trim())throw Error('Название и текст не должны быть пустыми.');
     entry.history.push({version:entry.version,title:entry.title,text:entry.text,updatedAt:entry.updatedAt});
     entry.title=patch.title;entry.text=patch.text;entry.version++;entry.updatedAt=new Date().toISOString();
-    for(const arc of entries.filter(e=>e.summaryIds.includes(id)))arc.needsReview=true;
+    for(const parent of hierarchyIndex(entries).ancestors(entry))parent.needsReview=true;
     return entry;
 }
 export const exportArchive = archive => ({format:'pensieve',version:1,exportedAt:new Date().toISOString(),archive:clone(archive)});
@@ -83,23 +86,24 @@ export function validateArchive(input) {
     const archive=emptyArchive(typeof input.owner==='string'?input.owner:'');
     const ids=new Set();
     archive.entries=input.entries.map(e=>{
-        if(!e||!['summary','arc'].includes(e.type)||ids.has(e.id))throw Error('Некорректный тип или повторяющийся ID записи.');
+        if(!e||!Object.hasOwn(LEVELS,e.type)||ids.has(e.id))throw Error('Некорректный тип или повторяющийся ID записи.');
         const id=requireText(e.id,'id',200);ids.add(id);
         if(!Number.isFinite(e.order)||!Number.isInteger(e.version)||e.version<1||typeof e.active!=='boolean'||!Array.isArray(e.sources)||!Array.isArray(e.summaryIds)||!Array.isArray(e.history))throw Error('Некорректные поля записи.');
         const sources=e.sources.map(s=>{
             if(!s||typeof s.id!=='string'||!s.id||typeof s.hash!=='string'||!/^[a-f0-9]{32}$/.test(s.hash)||!Number.isInteger(s.index)||s.index<0||typeof s.previousHidden!=='boolean')throw Error('Некорректные источники записи.');
             return {id:s.id,hash:s.hash,index:s.index,previousHidden:s.previousHidden};
         });
-        if(e.type==='summary'&&e.summaryIds.length||e.type==='arc'&&(e.sources.length||e.summaryIds.length<2))throw Error('Неверные связи записи.');
+        if(e.type==='summary'&&e.summaryIds.length||e.type==='arc'&&(e.sources.length||e.summaryIds.length<2)||e.type!=='volume'&&e.chapterIds?.length||e.type==='volume'&&(e.sources.length||e.summaryIds.length||!Array.isArray(e.chapterIds)||e.chapterIds.length<2))throw Error('Неверные связи записи.');
         return {id,type:e.type,title:requireText(e.title,'title',2000),text:requireText(e.text,'text'),order:e.order,active:e.active,version:e.version,
             createdAt:requireText(e.createdAt,'createdAt',100),updatedAt:requireText(e.updatedAt??e.createdAt,'updatedAt',100),sources,
             summaryIds:e.summaryIds.map(id=>requireText(id,'summaryId',200)),
+            ...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>requireText(id,'chapterId',200))}:{}),
             history:e.history.map(h=>({version:Number(h.version)||1,title:requireText(h.title,'history title',2000),text:requireText(h.text,'history text'),updatedAt:typeof h.updatedAt==='string'?h.updatedAt:e.createdAt})),
             needsReview:!!e.needsReview,restored:!!e.restored,imported:!!e.imported,preset:typeof e.preset==='string'?e.preset:'',
         };
     });
     const byId=new Map(archive.entries.map(e=>[e.id,e]));
-    for(const e of archive.entries)if(e.type==='arc'&&(new Set(e.summaryIds).size!==e.summaryIds.length||e.summaryIds.some(id=>byId.get(id)?.type!=='summary')))throw Error('Арка ссылается на отсутствующие или повторяющиеся сводки.');
+    for(const e of archive.entries)if(e.type!=='summary'){const links=childrenIds(e);if(new Set(links).size!==links.length||links.some(id=>byId.get(id)?.type!==LEVELS[e.type].sourceType))throw Error('Неверные, отсутствующие или повторяющиеся источники главы или тома.');}
     archive.revision=Number.isInteger(input.revision)?input.revision:0;
     if(bytes(archive)>MAX_ARCHIVE_BYTES)throw Error('Архив превышает безопасный предел 20 MiB. Разделите резервную копию.');
     return archive;
@@ -114,6 +118,6 @@ export function parseArchive(text) {
 }
 export function mergeArchives(original,incoming,uuid) {
     const result=clone(original), map=new Map(incoming.entries.map(e=>[e.id,uuid()]));
-    result.entries.push(...clone(incoming.entries).map(e=>({...e,id:map.get(e.id),summaryIds:e.summaryIds.map(id=>map.get(id)),imported:true})));
+    result.entries.push(...clone(incoming.entries).map(e=>({...e,id:map.get(e.id),summaryIds:e.summaryIds.map(id=>map.get(id)),...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>map.get(id))}:{}),imported:true})));
     return result;
 }
