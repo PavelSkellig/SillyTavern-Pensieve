@@ -46,7 +46,7 @@
 #pensieve-settings .pv-settings-title i,#pensieve-settings .inline-drawer-icon{color:#B79C73;flex:0 0 auto}
 #pensieve-settings .inline-drawer-icon{margin-left:auto;filter:none}
 #pensieve-settings .pv-settings-content{
-    width:100%;max-width:100%;background:#14243D;border:1px solid #B79C7377;
+    width:100%;max-width:100%;background:#101E33;border:1px solid #B79C7377;
     border-radius:10px;padding:10px;margin-bottom:5px;
 }
 #pensieve-settings .pv-settings-actions{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%}

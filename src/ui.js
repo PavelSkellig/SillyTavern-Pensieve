@@ -3,7 +3,7 @@ import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
 
-export const UI_VERSION='1.6.1';
+export const UI_VERSION='1.6.2';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -26,7 +26,7 @@ export class UI {
         else this.panel.querySelector('.pv-header').append(version);
         const head=this.panel.querySelector('.pv-header');
         if(!head.querySelector('.pv-brand-mark')){head.querySelector('h2 i')?.remove();const mark=el('div',{class:'pv-brand-mark','aria-hidden':'true'});mark.append(el('i',{class:'fa-solid fa-book-open'}));head.prepend(mark);}
-        this.panel.querySelectorAll('[data-tab]').forEach(b=>{const label=b.textContent.trim();b.setAttribute('aria-label',label);b.replaceChildren(el('span',{class:'pv-tab-full'},label));if(b.dataset.tab==='memory')b.append(el('span',{class:'pv-tab-short','aria-hidden':'true'},'Память'));});
+        this.panel.querySelectorAll('[data-tab]').forEach(b=>{const label=b.dataset.tab==='memory'?'Память':b.textContent.trim();b.setAttribute('aria-label',label);b.replaceChildren(el('span',{class:'pv-tab-full'},label));if(b.dataset.tab==='memory')b.append(el('span',{class:'pv-tab-short','aria-hidden':'true'},'Память'));});
         // Also upgrade a cached older panel template without requiring a hard reload.
         let minimize=this.panel.querySelector('[data-action="minimize"]');
         if(!minimize){minimize=button('−',()=>this.minimize());minimize.dataset.action='minimize';minimize.classList.add('pv-icon');minimize.setAttribute('aria-label','Свернуть окно');this.panel.querySelector('[data-action="close"]').before(minimize);}
@@ -152,6 +152,10 @@ export class UI {
         const actions=el('div',{class:'pv-settings-actions'});
         const items=[
             ['pensieve-settings-home','Главная','fa-house',()=>this.open('home')],
+            ['pensieve-settings-archive','Архив','fa-box-archive',()=>this.open('archive')],
+            ['pensieve-settings-memory','Память','fa-eye',()=>this.open('memory')],
+            ['pensieve-settings-prompts','Промпты','fa-feather',()=>this.open('prompts')],
+            ['pensieve-settings-options','Настройки','fa-gear',()=>this.open('settings')],
         ];
         for(const [id,label,glyph,action]of items) {
             const control=button('',event=>{
@@ -187,8 +191,10 @@ export class UI {
     }
     open(tab=this.tab) {
         const resume=this.windowState==='minimized'&&tab===this.tab;
+        const current=this.panel.open&&tab===this.tab&&this.content.dataset.ready==='true'&&(tab==='prompts'||this.isCurrentSession())&&!this.resumeDirty;
         this.windowState='open';this.restoreDock.hidden=true;
         if(!this.panel.open)this.panel.showModal();
+        if(current)return;
         // ST replaces chat metadata before emitting CHAT_CHANGED. Check the live
         // session synchronously, including during a pending chat network request.
         if(!resume||(tab!=='prompts'&&(this.resumeDirty||!this.isCurrentSession())))this.go(tab);
@@ -200,6 +206,12 @@ export class UI {
     isCurrentSession() {try{if(!this.renderSession)return false;this.e.assert(this.renderSession);return true;}catch{return false;}}
     rememberView() {
         if(this.content.dataset.ready!=='true')return;
+        const editor=this.promptEditor;
+        if(editor&&this.content.contains(editor.node)){
+            this.promptDrafts??=new Map();
+            if(editor.node.value===editor.base)this.promptDrafts.delete(editor.key);
+            else this.promptDrafts.set(editor.key,{base:editor.base,text:editor.node.value});
+        }
         this.workspaceViews??=new Map();
         this.workspaceViews.set(JSON.stringify([this.renderSession?.key??null,this.content.dataset.view]),{
             scroll:this.content.scrollTop,overlap:this.content.querySelector('[aria-label="Повторная обработка"]')?.value,
@@ -440,12 +452,15 @@ export class UI {
         const segments=row(...Object.entries(LEVELS).map(([type,level])=>button(`Промпт ${level.genitive}`,()=>{this.promptTab=type;this.render();},this.promptTab===type)));segments.classList.add('pv-level-tabs');this.content.append(segments);
         const type=this.promptTab,group=this.e.settings().prompts[type],preset=group.presets.find(p=>p.id===group.selected)??group.presets[0];
         const select=el('select',{'aria-label':'Пресет промпта'});group.presets.forEach(p=>select.append(el('option',{value:p.id},p.name)));select.value=preset.id;
-        const text=el('textarea',{'aria-label':`Промпт ${LEVELS[type].genitive}`,spellcheck:'false'},preset.text);
-        select.onchange=async()=>{if(text.value!==preset.text&&!await this.confirm('Несохранённый промпт','Отбросить изменения и открыть другой пресет?')){select.value=preset.id;return;}group.selected=select.value;this.saveSettings();this.render();};
+        const key=JSON.stringify([type,preset.id]),draft=this.promptDrafts?.get(key);
+        if(draft&&draft.base!==preset.text)this.promptDrafts.delete(key);
+        const text=el('textarea',{'aria-label':`Промпт ${LEVELS[type].genitive}`,spellcheck:'false'},draft?.base===preset.text?draft.text:preset.text);
+        const editor=this.promptEditor={node:text,key,base:preset.text};
+        select.onchange=async()=>{if(text.value!==preset.text&&!await this.confirm('Несохранённый промпт','Отбросить изменения и открыть другой пресет?')){select.value=preset.id;return;}text.value=preset.text;this.promptDrafts?.delete(key);group.selected=select.value;this.saveSettings();this.render();};
         text.classList.add('pv-prompt-text');
         const editorHead=el('div',{class:'pv-prompt-heading'});editorHead.append(el('span',{},'Ваш промпт'),iconButton('Развернуть редактор',()=>this.expandPrompt(text),'fa-expand'));
         this.content.append(field('Пресет',select),editorHead,field(`Ваш промпт ${LEVELS[type].genitive}`,text),el('p',{class:'pv-muted'},'Текст используется буквально, включая Markdown и {{макросы}}. Расширение не навязывает структуру воспоминания. Сохраните изменения перед генерацией.'));
-        this.content.append(row(button('Сохранить промпт',()=>{preset.history.push(preset.text);preset.text=text.value;this.saveSettings();this.showNotice('Промпт сохранён.');},true),button('Новый пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(!name)return;const p={id:this.e.host.uuid(),name,text:text.value,history:[]};group.presets.push(p);group.selected=p.id;this.saveSettings();})),button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){preset.name=name;this.saveSettings();}})),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;this.saveSettings();}}))));
+        this.content.append(row(button('Сохранить промпт',()=>{preset.history.push(preset.text);preset.text=text.value;editor.base=preset.text;this.promptDrafts?.delete(key);this.saveSettings();this.showNotice('Промпт сохранён.');},true),button('Новый пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(!name)return;const p={id:this.e.host.uuid(),name,text:text.value,history:[]};group.presets.push(p);group.selected=p.id;this.saveSettings();})),button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){preset.name=name;this.saveSettings();}})),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;this.saveSettings();}}))));
         this.content.append(row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;this.showNotice('Текст загружен в редактор. Нажмите «Сохранить промпт».');}}catch(error){this.showNotice(error.message);}}),button('Экспорт .txt',()=>download(`pensieve-prompt-${type}.txt`,text.value,'text/plain')),button('Удалить пресет',()=>this.act(async()=>{if(group.presets.length<2)throw Error('Последний пресет удалить нельзя.');if(await this.confirm('Удаление пресета','Удалить выбранный пресет?')){group.presets=group.presets.filter(p=>p.id!==preset.id);group.selected=group.presets[0].id;this.saveSettings();}}))));
     }
     expandPrompt(text) {

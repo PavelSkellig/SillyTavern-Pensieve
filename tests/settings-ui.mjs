@@ -41,17 +41,17 @@ try {
         assert.equal(await header.getAttribute('aria-expanded'),'false');
         await header.click();await content.waitFor({state:'visible'});
         await page.waitForTimeout(300);assert.equal(await header.getAttribute('aria-expanded'),'true');
-        const buttons=content.locator('.pv-settings-action');assert.equal(await buttons.count(),1);
+        const buttons=content.locator('.pv-settings-action');assert.equal(await buttons.count(),5);
         const sizes=await buttons.evaluateAll(nodes=>nodes.map(n=>({width:n.getBoundingClientRect().width,scroll:n.scrollWidth,client:n.clientWidth})));
         assert.ok(sizes.every(s=>Math.abs(s.width-sizes[0].width)<1&&s.scroll<=s.client),`${width}: equal readable buttons`);
         assert.ok(await header.locator('.inline-drawer-icon.up').count());
         await page.screenshot({path:`work/screenshots/settings-drawer-${width}.png`});
         await header.click();await content.waitFor({state:'hidden'});assert.equal(await header.getAttribute('aria-expanded'),'false');
-        console.log(`PASS native settings drawer ${width}px: full width, single line, one Home button, expand/collapse`);
+        console.log(`PASS native settings drawer ${width}px: full width, single line, five navigation buttons, expand/collapse`);
     }
     await page.setViewportSize({width:390,height:844});await header.scrollIntoViewIfNeeded();
     await header.focus();await page.keyboard.press('Enter');await content.waitFor({state:'visible'});
-    for(const [id,tab]of [['pensieve-settings-home','home']]){
+    for(const [id,tab]of [['pensieve-settings-home','home'],['pensieve-settings-archive','archive'],['pensieve-settings-memory','memory'],['pensieve-settings-prompts','prompts'],['pensieve-settings-options','settings']]){
         const outer=page.locator('#extensions-settings-button .drawer-content');
         if(!await outer.evaluate(n=>n.classList.contains('openDrawer')))await page.locator('#extensions-settings-button .drawer-toggle').click();
         await page.waitForTimeout(300);

@@ -42,7 +42,7 @@ try {
   await page.setViewportSize({width,height:700});
   const nav=await panel.locator('.pv-tabs').evaluate(n=>[...n.children].map(b=>({top:b.getBoundingClientRect().top,height:b.getBoundingClientRect().height,scroll:b.scrollWidth,width:b.clientWidth,line:parseFloat(getComputedStyle(b).lineHeight)})));
   assert.ok(nav.every(b=>b.top===nav[0].top&&b.height<49&&b.scroll<=b.width+1),'compact navigation must remain one row at '+width+': '+JSON.stringify(nav));
-  assert.equal(await panel.getByRole('button',{name:'Активная память',exact:true}).count(),1,'short mobile tab must keep its full accessible name');
+  assert.equal(await panel.getByRole('button',{name:'Память',exact:true}).count(),1,'memory tab uses the reference label');
   assert.ok(await panel.evaluate(n=>n.scrollWidth<=n.clientWidth+1),'no dialog overflow at '+width);
  }
  await page.setViewportSize({width:390,height:844});

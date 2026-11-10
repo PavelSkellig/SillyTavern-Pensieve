@@ -11,5 +11,5 @@ try{
   original.remove();
   try{await Promise.all([ui.mountSettingsDrawer(),ui.mountSettingsDrawer()]);return {roots:document.querySelectorAll('#pensieve-settings').length,actions:document.querySelectorAll('#pensieve-settings .pv-settings-action').length,unchanged:before===JSON.stringify([SillyTavern.getContext().chatMetadata,SillyTavern.getContext().extensionSettings.pensieve])};}
   finally{document.querySelectorAll('#pensieve-settings').forEach(n=>n.remove());parent.insertBefore(original,next);}
- });assert.deepEqual(result,{roots:1,actions:1,unchanged:true});console.log('PASS '+engine+': simultaneous first registration creates one Home entry and preserves data');await context.close();
+ });assert.deepEqual(result,{roots:1,actions:5,unchanged:true});console.log('PASS '+engine+': simultaneous first registration creates five navigation entries in one drawer and preserves data');await context.close();
 }finally{await browser.close();}
