@@ -7,7 +7,7 @@ export const WARN_ARCHIVE_BYTES = 5 * 1024 * 1024;
 export const clone = value => structuredClone(value);
 export const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 export const defaults = () => ({
-    enabled: true, inject: true, exclude: true, collapse: false,
+    enabled: true, inject: true, exclude: true, collapse: false, previewEpisodes:true,
     tokenLimit: 6000, position: 1, depth: 4, theme: 'dark',
     pastNoteEnabled: true,
     pastNote: 'Ниже приведены сведения о ранее произошедших событиях. Учитывай их для последовательности истории и поведения персонажей, но не пересказывай прошлое без необходимости и не разыгрывай завершённые события повторно.',
@@ -49,7 +49,7 @@ export function inspectSources(chat, sources) {
 export function findOverlaps(entries, range) {
     const ids=new Set(range.map(s=>s.id).filter(Boolean));
     const hashes=new Set(range.map(s=>s.hash));
-    return entries.filter(e=>e.type==='summary'&&e.sources.some(s=>s.id?ids.has(s.id):hashes.has(s.hash)));
+    return entries.filter(e=>e.type==='summary'&&!e.detachedSources&&e.sources.some(s=>s.id?ids.has(s.id):hashes.has(s.hash)));
 }
 export const chronological = entries => [...entries].sort((a,b)=>a.order-b.order||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
 export function memoryEntries(entries) {
@@ -61,7 +61,6 @@ export function memoryConflicts(entries) {
     const coverage=e=>{const ids=new Set([e.id,...index.descendants(e)]),keys=new Set([...ids].map(id=>'record:'+id));for(const id of ids)for(const source of index.byId.get(id)?.sources??[])keys.add('source:'+(source.id||source.hash));return keys;};
     const covered=new Map(active.map(e=>[e.id,coverage(e)]));
     for(let i=0;i<active.length;i++) for(let j=i+1;j<active.length;j++) {
-        if(active[i].type==='summary'&&active[j].type==='summary')continue;
         const ids=covered.get(active[i].id);if([...covered.get(active[j].id)].some(id=>ids.has(id)))conflicts.push([active[i].id,active[j].id]);
     }
     return conflicts;
@@ -88,6 +87,8 @@ export function validateArchive(input) {
     archive.entries=input.entries.map(e=>{
         if(!e||!Object.hasOwn(LEVELS,e.type)||ids.has(e.id))throw Error('Некорректный тип или повторяющийся ID записи.');
         const id=requireText(e.id,'id',200);ids.add(id);
+        if(e.origin!==undefined&&(!e.origin||typeof e.origin!=='object'||Array.isArray(e.origin)||typeof e.origin.chat!=='string'||!e.origin.chat||e.origin.chat.length>10000||typeof e.origin.id!=='string'||!e.origin.id||e.origin.id.length>200))throw Error('Повреждено происхождение записи.');
+        if(e.sourceChat!==undefined&&(typeof e.sourceChat!=='string'||!e.sourceChat||e.sourceChat.length>10000)||e.detachedSources!==undefined&&typeof e.detachedSources!=='boolean'||e.backupActive!==undefined&&typeof e.backupActive!=='boolean')throw Error('Повреждены сведения об источнике записи.');
         if(!Number.isFinite(e.order)||!Number.isInteger(e.version)||e.version<1||typeof e.active!=='boolean'||!Array.isArray(e.sources)||!Array.isArray(e.summaryIds)||!Array.isArray(e.history))throw Error('Некорректные поля записи.');
         const sources=e.sources.map(s=>{
             if(!s||typeof s.id!=='string'||!s.id||typeof s.hash!=='string'||!/^[a-f0-9]{32}$/.test(s.hash)||!Number.isInteger(s.index)||s.index<0||typeof s.previousHidden!=='boolean')throw Error('Некорректные источники записи.');
@@ -100,6 +101,7 @@ export function validateArchive(input) {
             ...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>requireText(id,'chapterId',200))}:{}),
             history:e.history.map(h=>({version:Number(h.version)||1,title:requireText(h.title,'history title',2000),text:requireText(h.text,'history text'),updatedAt:typeof h.updatedAt==='string'?h.updatedAt:e.createdAt})),
             needsReview:!!e.needsReview,restored:!!e.restored,imported:!!e.imported,preset:typeof e.preset==='string'?e.preset:'',
+            ...(e.origin?{origin:clone(e.origin)}:{}),...(e.sourceChat!==undefined?{sourceChat:e.sourceChat}:{}),...(e.detachedSources!==undefined?{detachedSources:e.detachedSources}:{}),...(e.backupActive!==undefined?{backupActive:e.backupActive}:{}),
         };
     });
     const byId=new Map(archive.entries.map(e=>[e.id,e]));
