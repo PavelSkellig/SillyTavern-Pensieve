@@ -133,8 +133,8 @@ export class UI {
         this.decorateMessages();this.e.host.notify('success','Эпизод сохранён в памяти текущего чата.');
     }
     async mountSettingsDrawer() {
-        if(document.getElementById('pensieve-settings'))return;
         const {toggleDrawer}=await import('/scripts/utils.js');
+        if(document.getElementById('pensieve-settings'))return;
         const container=document.getElementById('extensions_settings2')??document.getElementById('extensions_settings');
         if(!container)throw Error('Не удалось найти панель настроек расширений SillyTavern.');
         // A dedicated outer wrapper keeps this drawer a full-width sibling of other extensions.
