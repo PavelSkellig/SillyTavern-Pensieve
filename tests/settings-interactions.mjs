@@ -48,7 +48,7 @@ try {
     window.qaOpenCount=0;const original=HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal=function(...args){if(this.id==='pensieve-panel')window.qaOpenCount++;return original.apply(this,args);};
  });
- const items=[['pensieve-settings-summary','home'],['pensieve-settings-arc','archive'],['pensieve-open','archive'],['pensieve-settings-memory','memory'],['pensieve-settings-prompts','prompts'],['pensieve-settings-options','settings']];
+ const items=[['pensieve-settings-summary','home'],['pensieve-settings-arc','archive'],['pensieve-settings-volume','archive'],['pensieve-open','archive'],['pensieve-settings-memory','memory'],['pensieve-settings-prompts','prompts'],['pensieve-settings-options','settings']];
  for(const [id,tab]of items)for(const hit of ['icon','text','padding']) {
     await showSettings();if(await header.getAttribute('aria-expanded')!=='true')await header.tap();
     const control=page.locator(`#${id}`);await control.scrollIntoViewIfNeeded();
@@ -63,7 +63,7 @@ try {
     assert.equal(await header.getAttribute('aria-expanded'),'true','action buttons must not collapse drawer');
     assert.equal(await page.locator('#pensieve-panel').count(),1,'one shared main window');
     if(id==='pensieve-settings-summary')assert.ok(await panel.locator('[name="rangeStart"]').count());
-    if(id==='pensieve-settings-arc')assert.ok(await panel.getByText('Отметьте сводки флажками, чтобы создать арку.',{exact:true}).count());
+    if(id==='pensieve-settings-arc')assert.ok(await panel.getByText('Отметьте эпизоды флажками, чтобы создать главу.',{exact:true}).count());
     const box=await panel.evaluate(n=>({scroll:n.scrollWidth,client:n.clientWidth}));assert.ok(box.scroll<=box.client+1);
     const scroller=panel.locator('.pv-content');await scroller.evaluate(n=>n.scrollTop=n.scrollHeight);
     await panel.getByRole('button',{name:'Закрыть',exact:true}).tap();await panel.waitFor({state:'hidden'});

@@ -41,7 +41,7 @@ try {
         assert.equal(await header.getAttribute('aria-expanded'),'false');
         await header.click();await content.waitFor({state:'visible'});
         await page.waitForTimeout(300);assert.equal(await header.getAttribute('aria-expanded'),'true');
-        const buttons=content.locator('.pv-settings-action');assert.equal(await buttons.count(),6);
+        const buttons=content.locator('.pv-settings-action');assert.equal(await buttons.count(),7);
         const sizes=await buttons.evaluateAll(nodes=>nodes.map(n=>({width:n.getBoundingClientRect().width,scroll:n.scrollWidth,client:n.clientWidth})));
         assert.ok(sizes.every(s=>Math.abs(s.width-sizes[0].width)<1&&s.scroll<=s.client),`${width}: equal readable buttons`);
         assert.ok(await header.locator('.inline-drawer-icon.up').count());

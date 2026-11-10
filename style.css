@@ -385,3 +385,15 @@
 .pensieve .pv-memory-section[data-memory-section="current"] .pv-memory-section-heading > i::before{content:'✦';font-family:Georgia,serif;font-size:1.25em}
 .pensieve .pv-entry-links{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
 .pensieve.pv-editor .pv-header h2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;max-height:2.6em;flex-shrink:1;line-height:1.25}
+
+/* 1.5 book levels keep the approved Ravenclaw layout. */
+.pensieve .pv-home-actions{grid-template-columns:repeat(3,minmax(0,1fr))}
+.pensieve .pv-level-tabs{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.pensieve .pv-level-tabs button{min-width:0;padding:7px 4px;font-size:13px;line-height:1.3}
+.pensieve .pv-selection-tokens{font-variant-numeric:tabular-nums}
+.pensieve .pv-source-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;border-bottom:1px solid var(--pv-line);padding:12px 0}
+.pensieve .pv-source-item strong{font:600 17px/1.4 Georgia,serif;overflow-wrap:anywhere}
+.pensieve .pv-source-item small{grid-column:1;font-size:12px}.pensieve .pv-source-item button{grid-column:2;grid-row:1/3;align-self:center}
+#chat .pv-message-action svg{width:20px;height:20px;stroke-width:1.6}
+#chat .pv-message-action svg .pv-bookmark-star{fill:currentColor;stroke:none}
+@media(max-width:600px){.pensieve .pv-home-actions{gap:5px}.pensieve .pv-home-actions button{font-size:11px;line-height:1.3;gap:4px;min-height:40px;padding:6px 4px}.pensieve .pv-home-actions i{font-size:14px}.pensieve .pv-level-tabs button{font-size:12px;min-height:40px}}

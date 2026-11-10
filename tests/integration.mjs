@@ -43,7 +43,7 @@ try {
  await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await page.waitForSelector('#pensieve-panel[open]');
  const panel=page.locator('#pensieve-panel');
  await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('50');
- await panel.getByRole('button',{name:'Создать сводку',exact:true}).last().click();
+ await panel.getByRole('button',{name:'Создать эпизод',exact:true}).last().click();
  const preview=page.locator('.pv-editor[open]').last();await preview.getByLabel('Текст воспоминания').waitFor();
  assert.equal(await page.evaluate(()=>SillyTavern.getContext().chat[1].is_system),false);
  await preview.getByLabel('Название воспоминания').fill('Разговор в библиотеке');await preview.getByLabel('Текст воспоминания').fill('ALPHA — 3 мая 1899 года. Проверено вручную.');
@@ -75,7 +75,7 @@ try {
  console.log('PASS actual ST: token overflow blocks normal generation without silently truncating');
  await panel.locator('[data-tab="prompts"]').click();
  const chooser=page.waitForEvent('filechooser');await panel.getByRole('button',{name:'Импорт из .txt'}).click();await (await chooser).setFiles({name:'prompt.txt',mimeType:'text/plain',buffer:Buffer.from('Импортированный промпт {{user}}')});
- await page.waitForTimeout(200);assert.equal(await panel.getByLabel('Промпт сводки',{exact:true}).inputValue(),'Импортированный промпт {{user}}');await panel.getByRole('button',{name:'Сохранить промпт',exact:true}).click();
+ await page.waitForTimeout(200);assert.equal(await panel.getByLabel('Промпт эпизода',{exact:true}).inputValue(),'Импортированный промпт {{user}}');await panel.getByRole('button',{name:'Сохранить промпт',exact:true}).click();
  await page.waitForTimeout(1200);await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-open'));
  await page.evaluate(async avatar=>{const c=SillyTavern.getContext();const id=c.characters.findIndex(x=>x.avatar===avatar);await c.selectCharacterById(String(id));},qaAvatar);
  assert.equal(await page.evaluate(()=>SillyTavern.getContext().chatMetadata.pensieve.entries.length),3);

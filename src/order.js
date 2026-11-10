@@ -30,6 +30,6 @@ export function narrativeOrder(entries,allEntries,chat) {
     if(unresolved.length)return {entries:[...entries],ranges,warnings:[`Не удалось однозначно определить исходный порядок: ${unresolved.slice(0,5).map(e=>e.title??e.id).join(', ')}${unresolved.length>5?'…':''}. Сохранён показанный порядок; проверьте его вручную.`]};
     const sorted=[...entries].sort((a,b)=>ranges.get(a.id).start-ranges.get(b.id).start);
     for(let i=1;i<sorted.length;i++)if(ranges.get(sorted[i-1].id).end>=ranges.get(sorted[i].id).start)
-        return {entries:[...entries],ranges,warnings:['Исходные диапазоны пересекаются или чередуются внутри арки. Однозначный порядок не определён: сохранён показанный порядок; проверьте его вручную.']};
+        return {entries:[...entries],ranges,warnings:['Исходные диапазоны пересекаются или чередуются внутри главы или тома. Однозначный порядок не определён: сохранён показанный порядок; проверьте его вручную.']};
     return {entries:sorted,ranges,warnings:[]};
 }

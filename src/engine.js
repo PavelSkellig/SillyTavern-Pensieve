@@ -46,7 +46,7 @@ export class Engine {
         else {
             const entries=this.archive(s).entries;
             const chosen=childrenIds(draft).map(id=>entries.find(e=>e.id===id));
-            if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные сводки изменились. Выберите их заново.');
+            if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Выберите их заново.');
             source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
         }
         const preset=this.prompt(draft.type),limits=this.host.limits();
@@ -54,7 +54,7 @@ export class Engine {
         this.assert(s);
         if(this.cancelled)throw Error('Генерация отменена до отправки запроса.');
         if(!Number.isFinite(tokens)||!Number.isFinite(limits.context)||!Number.isFinite(limits.output))throw Error('Не удалось проверить лимит контекста модели.');
-        if(tokens+limits.output+256>limits.context)throw Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число сводок либо увеличьте контекст в SillyTavern. Ничего не обрезано.`);
+        if(tokens+limits.output+256>limits.context)throw Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число записей либо увеличьте контекст в SillyTavern. Ничего не обрезано.`);
         const unlock=this.host.lock?.();
         try {
             const text=await this.host.generate(preset.text,source);
@@ -114,7 +114,7 @@ export class Engine {
                     source.ref.extra[KEY].id??=this.host.uuid();source.id=source.ref.extra[KEY].id;
                 }
                 // Replacement keeps the same provenance; extending an existing range is a separate version.
-                if(old&&(old.sources.length!==draft.range.length||old.sources.some((x,i)=>x.id!==draft.range[i].id)))throw Error('Для замены выберите ровно исходные сообщения этой сводки. Для другого диапазона сохраните отдельную версию.');
+                if(old&&(old.sources.length!==draft.range.length||old.sources.some((x,i)=>x.id!==draft.range[i].id)))throw Error('Для замены выберите ровно исходные сообщения этого эпизода. Для другого диапазона сохраните отдельную версию.');
             } else {
                 if(childrenIds(draft).some((id,i)=>archive.entries.find(e=>e.id===id)?.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Повторите генерацию.');
             }
@@ -212,7 +212,7 @@ export class Engine {
     async restore(id) {
         return this.run(async()=>{
             const s=this.session(),archive=clone(this.archive(s)),entry=archive.entries.find(e=>e.id===id);
-            if(!entry||entry.type!=='summary')throw Error('Выберите сводку для восстановления исходников.');
+            if(!entry||entry.type!=='summary')throw Error('Выберите эпизод для восстановления исходников.');
             if(archive.pending)throw Error('Сначала восстановите незавершённую операцию.');
             archive.pending={type:'restore',entryId:id};await this.persist(s,archive);
             const result=await this.restoreInternal(s,entry);await this.refreshMemory();return result;
@@ -241,8 +241,8 @@ export class Engine {
             const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');
             if(a.entries.some(parent=>childrenIds(parent).includes(id)))throw Error('Запись входит в связанную главу или том. Сначала удалите родительскую запись; её содержимое останется в архиве.');
             if(e.type==='summary') {
-                if(a.entries.some(x=>x.summaryIds.includes(id)))throw Error('Сводка связана с аркой. Сначала удалите соответствующие арки.');
-                if(s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.includes(id)))throw Error('Сначала восстановите исходники сводки. Для изменённых источников верните исходный ответ и повторите восстановление.');
+                if(a.entries.some(x=>x.summaryIds.includes(id)))throw Error('Эпизод связан с главой. Сначала удалите соответствующие главы.');
+                if(s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.includes(id)))throw Error('Сначала восстановите исходники эпизода. Для изменённых источников верните исходный ответ и повторите восстановление.');
             }
             if(e.type!=='summary'&&restoreSummaries)for(const source of a.entries)if(childrenIds(e).includes(source.id))source.active=true;
             a.entries=a.entries.filter(x=>x.id!==id);

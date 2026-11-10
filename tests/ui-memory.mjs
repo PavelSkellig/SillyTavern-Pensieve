@@ -38,9 +38,9 @@ try{
  await panel.locator('[data-action="close"]').tap();await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
  console.log(`PASS ${engine}: boundary selection stays in chat; close/reopen retains range`);
  await panel.locator('[data-tab="archive"]').tap();
- const card=id=>panel.locator(`[data-entry-id="${id}"]`),status=id=>card(id).locator('.pv-memory-status');
- await status('qa-a').waitFor();assert.equal(await status('qa-a').innerText(),'Входит в арку №1');assert.equal(await status('qa-c').innerText(),'Активна');
- await card('qa-c').getByRole('checkbox').check();await card('qa-c').getByText('Выбрана для арки',{exact:true}).waitFor();assert.equal(await status('qa-c').innerText(),'Активна');
+ const card=id=>panel.locator(`[data-entry-id="${id}"]`),status=id=>card(id).locator('.pv-entry-title > .pv-memory-status');
+ await status('qa-a').waitFor();assert.equal(await status('qa-a').innerText(),'В архиве');assert.equal(await status('qa-c').innerText(),'Активна');
+ await card('qa-c').getByRole('checkbox').check();await card('qa-c').getByText('Выбран для главы',{exact:true}).waitFor();assert.equal(await status('qa-c').innerText(),'Активна');
  await panel.getByLabel('Фильтр архива').selectOption('active');assert.equal(await panel.locator('[data-entry-id]').count(),1);assert.equal(await status('qa-c').innerText(),'Активна');
  await panel.getByLabel('Фильтр архива').selectOption('inactive');assert.equal(await panel.locator('[data-entry-id]').count(),2);
  await panel.locator('[data-tab="memory"]').tap();await panel.locator('[data-memory-section="current"] [data-entry-id="qa-arc"]').waitFor();
