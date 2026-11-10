@@ -2,8 +2,9 @@ import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,
 import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
+import {GenerationView} from './generation-view.js';
 
-export const UI_VERSION='1.6.2';
+export const UI_VERSION='1.6.3';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -66,6 +67,7 @@ export class UI {
         if(c.eventTypes.APP_READY)c.eventSource.on(c.eventTypes.APP_READY,mountMenu);
         c.eventSource.on(c.eventTypes.CHAT_CHANGED,()=>{
             this.e.host.inject('');if(this.e.busy)this.e.cancel();
+            this.generationView?.clear();
             this.loadRange();this.chosen=[];this.chaptersChosen=[];this.arcOrderManual=false;this.volumeOrderManual=false;this.archiveSearch='';this.expanded.clear();
             this.resumeDirty=true;
             this.panel.querySelector('.pv-chat-name').textContent=this.e.host.context().chatId?`Чат: ${this.e.host.context().chatId}`:'Общие настройки · чат не открыт';
@@ -125,7 +127,7 @@ export class UI {
             const range=captureRange(this.e.host.context().chat,this.start,this.end);if(findOverlaps(this.e.archive(session).entries,range).length)throw Error('Диапазон уже обработан. Для отдельной версии или замены используйте форму эпизода на главной странице.');
             const start=this.start,end=this.end,node=[...document.querySelectorAll('#chat .mes[mesid]')].find(n=>Number(n.getAttribute('mesid'))===end);
             progress=el('div',{class:'pv-chat-progress',role:'status'},'Создаётся эпизод…');(node?.querySelector('.mes_block')??node)?.append(progress);this.decorateMessages();
-            return this.generating(()=>this.e.generateSummary(start,end),{inline:true,episode:true,waitForPreview:true});
+            return this.generating(()=>{this.e.assert(session);this.e.checkRange(session,range);return this.e.generateSummary(start,end);},{inline:true,episode:true,waitForPreview:true,type:'summary'});
         });}finally{progress?.remove();this.episodeTask=false;this.decorateMessages();}
     }
     async episodeSaved(draft) {
@@ -201,7 +203,7 @@ export class UI {
         this.go(tab,force);
         this.resumeDirty=false;
     }
-    minimize() {if(!this.panel.open)return;this.windowState='minimized';this.restoreDock.hidden=false;this.panel.close();}
+    minimize() {if(!this.panel.open)return;this.windowState='minimized';this.restoreDock.hidden=!!this.generationView?.isMinimized;this.panel.close();}
     restore() {this.open();}
     close() {this.windowState='closed';this.restoreDock.hidden=true;this.panel.close();}
     isCurrentSession() {try{if(!this.renderSession)return false;this.e.assert(this.renderSession);return true;}catch{return false;}}
@@ -317,7 +319,8 @@ export class UI {
         form.append(row(button('Создать эпизод',()=>this.act(async()=>{
             if(this.start===null||this.end===null)throw Error('Сначала выберите обе границы.');
             if(overlaps.length&&options.value!=='block'&&!await this.confirm('Повторная обработка','Этот диапазон уже представлен в архиве. Продолжить выбранным способом?'))return;
-            await this.generating(()=>this.e.generateSummary(this.start,this.end,{allowOverlap:options.value!=='block',replaceId:['block','version'].includes(options.value)?null:options.value}),{episode:true});
+            const session=this.e.session(),start=this.start,end=this.end,range=captureRange(this.e.host.context().chat,start,end),mode=options.value;
+            await this.generating(()=>{this.e.assert(session);this.e.checkRange(session,range);return this.e.generateSummary(start,end,{allowOverlap:mode!=='block',replaceId:['block','version'].includes(mode)?null:mode});},{episode:true,type:'summary'});
         }),true),button('Сбросить диапазон',()=>{this.clearRange();this.decorateMessages();this.render();})));
         form.append(el('p',{class:'pv-muted'},'После генерации проверьте и сохраните текст. Только затем исходные сообщения будут исключены из контекста.'));
     }
@@ -352,7 +355,7 @@ export class UI {
                 for(const warning of ordered.warnings)chosen.append(el('p',{class:'pv-warning'},warning));
                 const linked=archive.entries.filter(e=>e.type===target&&childrenIds(e).some(id=>this[key].includes(id)));
                 if(linked.length)chosen.append(el('p',{class:'pv-warning'},`Уже входят в ${target==='arc'?'главы':'тома'}: ${linked.map(e=>entryDisplayTitle(e,archive.entries)).join('; ')}. Проверьте состав перед объединением.`));
-                const generate=button(`Создать ${target==='arc'?'главу':'том'}`,()=>this.act(()=>this.generating(()=>target==='arc'?this.e.generateArc([...this[key]]):this.e.generateVolume([...this[key]]))),true);generate.disabled=this[key].length<2;
+                const generate=button(`Создать ${target==='arc'?'главу':'том'}`,()=>this.act(()=>{const session=this.e.session(),ids=[...this[key]];return this.generating(()=>{this.e.assert(session);return target==='arc'?this.e.generateArc(ids):this.e.generateVolume(ids);},{type:target});}),true);generate.disabled=this[key].length<2;
                 chosen.append(row(generate,button('По исходным сообщениям',()=>{this[manual]=false;this.render();}),button('Снять выбор',()=>{this[key]=[];this[manual]=false;this.render();})));
                 this.content.append(chosen);
             }
@@ -420,14 +423,16 @@ export class UI {
         card.append(details);return card;
     }
     async regenerateEntry(e) {
-        if(e.type==='volume')return this.generating(()=>this.e.generateVolume(e.chapterIds,{replaceId:e.id}));
-        if(e.type==='arc')return this.generating(()=>this.e.generateArc(e.summaryIds,{replaceId:e.id}));
+        const session=this.e.session();
+        if(e.type==='volume'){const ids=[...e.chapterIds];return this.generating(()=>{this.e.assert(session);return this.e.generateVolume(ids,{replaceId:e.id});},{type:'volume'});}
+        if(e.type==='arc'){const ids=[...e.summaryIds];return this.generating(()=>{this.e.assert(session);return this.e.generateArc(ids,{replaceId:e.id});},{type:'arc'});}
         if(hasDetachedSources(e))throw Error('Исходники этой копии относятся к другому чату или отсутствуют. Откройте сохранённый текст; для новых сообщений создайте новый эпизод.');
         const inspected=inspectSources(this.e.host.context().chat,e.sources);
         if(inspected.issues.length)throw Error('Исходные сообщения изменены или удалены. Выберите новый диапазон вручную.');
         const indices=inspected.matches.map(x=>x.index).sort((a,b)=>a-b);
         if(indices.at(-1)-indices[0]+1!==indices.length)throw Error('Исходники больше не образуют непрерывный диапазон. Выберите новый диапазон вручную.');
-        return this.generating(()=>this.e.generateSummary(indices[0],indices.at(-1),{allowOverlap:true,replaceId:e.id}),{episode:true});
+        const range=captureRange(this.e.host.context().chat,indices[0],indices.at(-1));
+        return this.generating(()=>{this.e.assert(session);this.e.checkRange(session,range);return this.e.generateSummary(indices[0],indices.at(-1),{allowOverlap:true,replaceId:e.id});},{episode:true,type:'summary'});
     }
     setMemoryEnabled(enabled) {
         return this.act(()=>{const settings=this.e.settings();settings.inject=enabled;if(enabled)settings.enabled=true;this.e.host.context().saveSettingsDebounced();});
@@ -568,9 +573,14 @@ export class UI {
         return new Promise(resolve=>{const {dialog,body}=this.makeDialog('Импорт архива',!!session);body.append(el('p',{},'Объединить с текущим архивом или заменить его? Импорт не исключает сообщения.'),row(button('Объединить',()=>{dialog.returnValue='merge';dialog.close();},true),button('Заменить',()=>{dialog.returnValue='replace';dialog.close();}),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const mode=['merge','replace'].includes(dialog.returnValue)?dialog.returnValue:null;dialog.remove();resolve(mode);};dialog.showModal();});
     }
     textDialog(title,text) {const {dialog,body}=this.makeDialog(title);const area=el('textarea',{readonly:'true','aria-label':title},text);body.append(area,row(button('Скопировать',()=>this.act(()=>copy(text))),button('Закрыть',()=>dialog.close())));dialog.onclose=()=>dialog.remove();dialog.showModal();}
-    async generating(fn,{inline=false,episode=false,waitForPreview=false}={}) {
-        let dialog;if(!inline&&!(episode&&!this.e.settings().previewEpisodes)){const progress=this.makeDialog('Создание воспоминания',true);dialog=progress.dialog;progress.body.append(el('p',{},'Запрос к текущей модели. Исходные сообщения остаются в истории и контексте.'),el('progress'),button('Отменить генерацию',()=>this.e.cancel()));dialog.oncancel=event=>{event.preventDefault();this.e.cancel();};dialog.showModal();}
-        try {const draft=await fn();if(dialog){dialog.close();dialog.remove();}if(draft.type==='summary'&&!this.e.settings().previewEpisodes){await this.e.saveDraft(draft,{title:draft.title,text:draft.text});await this.episodeSaved(draft);await this.refresh(true);}else{const preview=this.preview(draft);if(waitForPreview)await preview;}return draft;}finally{if(dialog?.isConnected){dialog.close();dialog.remove();}}
+    async generating(fn,options={}) {
+        this.generationView??=new GenerationView(this.e,{
+            makeDialog:(...args)=>this.makeDialog(...args),preview:draft=>{const done=this.preview(draft);return {done,dialog:this.editor};},
+            onSaved:async draft=>{await this.episodeSaved(draft);await this.refresh(true);},
+            onMinimize:()=>{if(this.panel?.open)this.minimize();if(this.restoreDock&&this.windowState==='minimized')this.restoreDock.hidden=true;},
+            onClear:()=>{if(this.restoreDock)this.restoreDock.hidden=this.windowState!=='minimized';},
+        });
+        return this.generationView.generate(fn,options);
     }
     preview(draft) {
         return new Promise(resolve=>{

@@ -420,3 +420,12 @@
 
 /* The shared main window leaves ST navigation actionable; editors remain native modals. */
 #pensieve-panel{position:fixed;inset:calc(var(--topBarBlockSize,40px) + 6px) 0 6px;margin:0 auto;z-index:3000;height:calc(100dvh - var(--topBarBlockSize,40px) - 12px);max-height:calc(100dvh - var(--topBarBlockSize,40px) - 12px)}
+
+/* One in-flow generation indicator; never overlays iPhone chat controls. */
+#pensieve-generation-dock{display:flex;justify-content:flex-end;flex:0 0 auto;width:100%;min-width:0;padding:4px 6px;box-sizing:border-box;position:relative;z-index:auto}
+#pensieve-generation-dock[hidden]{display:none!important}
+#pensieve-generation-dock button{display:flex;align-items:center;min-width:0;max-width:100%;min-height:36px;padding:6px 10px;box-sizing:border-box;border:1px solid #b79c73;border-radius:8px;background:#172c49;color:#f2ebdd;font:13px/1.4 system-ui,sans-serif;overflow-wrap:anywhere;text-align:left;cursor:pointer;touch-action:manipulation}
+#pensieve-generation-dock button:focus-visible{outline:2px solid #b79c73;outline-offset:2px}
+.pensieve.pv-generation-window .pv-content{min-height:0}.pensieve.pv-generation-window .pv-generation-note{font-size:12px}
+.pensieve.pv-generation-window progress{display:block;height:12px;margin:12px 0;accent-color:#b79c73}
+.pensieve.pv-generation-window .pv-content>button{width:100%;margin:5px 0}
