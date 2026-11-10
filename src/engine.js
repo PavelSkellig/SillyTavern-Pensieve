@@ -2,7 +2,7 @@ import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHI
 import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
-import {importedSourceConflicts} from './core.js';
+import {importedSourceConflicts,hasDetachedSources} from './core.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
@@ -72,7 +72,7 @@ export class Engine {
         return this.run(async()=>{
             const s=this.session();if(this.archive(s).pending)throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(this.archive(s).entries,range);
-            if(replaceId&&this.archive(s).entries.find(e=>e.id===replaceId)?.detachedSources)throw Error('Источники этой копии относятся к другому чату. Создайте отдельный новый эпизод.');
+            if(replaceId&&hasDetachedSources(this.archive(s).entries.find(e=>e.id===replaceId)))throw Error('Источники этой копии относятся к другому чату. Создайте отдельный новый эпизод.');
             if(overlaps.length&&!allowOverlap)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
             if(replaceId&&!overlaps.some(e=>e.id===replaceId))throw Error('Запись для замены не связана с диапазоном.');
             return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Эпизод №${nextNumber('summary',this.archive(s).entries)}`,order:start});
@@ -109,6 +109,11 @@ export class Engine {
             const s=draft.session;this.assert(s);
             if(!title?.trim()||!text?.trim())throw Error('Введите название и непустой текст.');
             const archive=clone(this.archive(s));if(archive.pending)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
+            const committed=draft.commitId&&archive.entries.find(e=>e.id===draft.commitId);
+            if(committed&&committed.version>=draft.commitVersion){
+                if(committed.version!==draft.commitVersion||committed.type!==draft.type||committed.title!==title||committed.text!==text)throw Error('Этот результат уже записан. Завершите проверку сохранения с прежним текстом; изменения внесите через архив.');
+                await this.persist(s,archive);await this.refreshMemory();return this.archive(s).entries.find(e=>e.id===committed.id);
+            }
             const old=draft.replaceId?archive.entries.find(e=>e.id===draft.replaceId):null;
             if(draft.replaceId&&!old)throw Error('Заменяемая запись удалена.');
             if(draft.type==='summary') {
@@ -124,7 +129,7 @@ export class Engine {
             }
             const now=new Date().toISOString();
             const entry=old?reviseEntry(archive.entries,old.id,{title,text}):{
-                id:this.host.uuid(),type:draft.type,title,text,createdAt:now,updatedAt:now,order:draft.order,version:1,history:[],active:true,
+                id:draft.commitId??this.host.uuid(),type:draft.type,title,text,createdAt:now,updatedAt:now,order:draft.order,version:1,history:[],active:true,
                 sources:[],summaryIds:[],needsReview:false,restored:false,preset:draft.preset,
             };
             entry.active=true;entry.preset=draft.preset;
@@ -136,6 +141,7 @@ export class Engine {
                 for(const e of archive.entries)if(replaced.has(e.id))e.active=false;
             }
             if(!old)archive.entries.push(entry);
+            draft.commitId=entry.id;draft.commitVersion=entry.version;
             archive.pending={type:draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id};
             await this.persist(s,archive,disk=>entry.type!=='summary'||inspectSources(disk.messages,entry.sources).issues.length===0);
             if(archive.pending)await this.completePending(s);
@@ -145,7 +151,7 @@ export class Engine {
     async completePending(s) {
         this.assert(s);
         const archive=this.archive(s),pending=archive.pending;if(!pending)return {issues:[]};
-        if(pending.type==='backup'){await this.persist(s,archive);archive.pending=null;await this.persist(s,archive);return {issues:[]};}
+        if(pending.type==='backup'){await this.persist(s,archive);await this.saveBackupGlobals(s,pending.globals);archive.pending=null;await this.persist(s,archive);return {issues:[]};}
         const entry=archive.entries.find(e=>e.id===pending.entryId);if(!entry)throw Error('Журнал ссылается на отсутствующую запись. Экспортируйте архив и обратитесь за восстановлением.');
         if(pending.type==='restore')return this.restoreInternal(s,entry);
         // Recovery must pass the same durability gate as the first attempt.
@@ -218,7 +224,7 @@ export class Engine {
         return this.run(async()=>{
             const s=this.session(),archive=clone(this.archive(s)),entry=archive.entries.find(e=>e.id===id);
             if(!entry||entry.type!=='summary')throw Error('Выберите эпизод для восстановления исходников.');
-            if(entry.detachedSources)throw Error('Исходники восстановленной копии принадлежат другому чату или отсутствуют. Сообщения текущего чата не изменены.');
+            if(hasDetachedSources(entry))throw Error('Исходники восстановленной копии принадлежат другому чату или отсутствуют. Сообщения текущего чата не изменены.');
             if(archive.pending)throw Error('Сначала восстановите незавершённую операцию.');
             archive.pending={type:'restore',entryId:id};await this.persist(s,archive);
             const result=await this.restoreInternal(s,entry);await this.refreshMemory();return result;
@@ -227,7 +233,7 @@ export class Engine {
     async recover(mode) {
         return this.run(async()=>{
             const s=this.session(),archive=this.archive(s);
-            if(mode==='restore'&&archive.pending?.type==='backup'){const previous=new Set(archive.pending.previousActive??[]);archive.entries.forEach(e=>e.active=previous.has(e.id));archive.pending=null;await this.persist(s,archive);await this.refreshMemory();return {issues:[]};}
+            if(mode==='restore'&&archive.pending?.type==='backup'){await this.saveBackupGlobals(s,archive.pending.previousGlobals);archive.entries.forEach(e=>e.active=false);archive.pending=null;await this.persist(s,archive);await this.refreshMemory();return {issues:[]};}
             if(mode==='restore'&&archive.pending) {archive.pending.type='restore';await this.persist(s,archive);}
             const result=archive.pending?await this.completePending(s):await this.persist(s,archive);
             await this.refreshMemory();return result;
@@ -265,6 +271,14 @@ export class Engine {
             a.entries=result.entries;a.pending=null;
         });
     }
+    async saveBackupGlobals(s,patch) {
+        if(!patch||!Object.keys(patch).length)return;
+        this.assert(s);const validated={};
+        if(patch.settings)Object.assign(validated,validateBackupSettings(patch.settings));
+        if(patch.prompts)validated.prompts=validatePromptGroups(patch.prompts);
+        if(typeof this.host.saveSettings!=='function')throw Error('Не удалось проверить сохранение общих настроек. Обновите SillyTavern и повторите восстановление.');
+        Object.assign(this.settings(),clone(validated));await this.host.saveSettings(validated);this.assert(s);
+    }
     async restoreBackup(backup,options={},session=null) {
         return this.run(async()=>{
             const s=session??this.session();this.assert(s);
@@ -275,7 +289,7 @@ export class Engine {
             if(mode==='replace'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.length))throw Error('Перед заменой архива восстановите собственные исключения сообщений. Объединение доступно без этого.');
             if(options.restorePrompts&&!file.prompts||options.restoreSettings&&!file.settings)throw Error('В этой прежней копии нет выбранных промптов или настроек.');
             const candidateSettings={...clone(settings),...(options.restoreSettings?validateBackupSettings(file.settings):{}),prompts:options.restorePrompts?validatePromptGroups(file.prompts):clone(settings.prompts)};
-            const stamp=JSON.stringify([s.metadata[KEY]??null,settings]),previousSettings=clone(settings),previousArchive=s.metadata[KEY],hadArchive=Object.hasOwn(s.metadata,KEY);
+            const stamp=JSON.stringify([s.metadata[KEY]??null,settings]),previousArchive=s.metadata[KEY],hadArchive=Object.hasOwn(s.metadata,KEY);
             const plan=planRestore(current,file,{targetKey:s.key,mode,activate:options.activate===true,uuid:()=>this.host.uuid(),chat:s.chat});
             if(options.activate){
                 const ordered=narrativeOrder(memoryEntries(plan.archive.entries),plan.archive.entries,s.chat),text=memoryText(plan.archive.entries,candidateSettings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
@@ -285,18 +299,25 @@ export class Engine {
             }
             this.assert(s);if(stamp!==JSON.stringify([s.metadata[KEY]??null,settings]))throw Error('Память или настройки изменились во время проверки. Повторите восстановление.');
             // A durable marker blocks all injection until both complete-archive writes verify.
-            plan.archive.pending={type:'backup',previousActive:current.entries.filter(e=>e.active).map(e=>e.id)};
+            const globals={...(options.restoreSettings?{settings:clone(file.settings)}:{}),...(options.restorePrompts?{prompts:clone(file.prompts)}:{})},previousGlobals={...(options.restoreSettings?{settings:validateBackupSettings(settings)}:{}),...(options.restorePrompts?{prompts:clone(settings.prompts)}:{})};
+            plan.archive.pending={type:'backup',globals,previousGlobals};
             let globalsApplied=false;this.restoring=true;
             try{
-                this.host.inject('');await this.persist(s,plan.archive);plan.archive.pending=null;await this.persist(s,plan.archive);this.assert(s);
-                if(options.restorePrompts||options.restoreSettings){globalsApplied=true;if(options.restoreSettings)Object.assign(settings,clone(file.settings));if(options.restorePrompts)settings.prompts=clone(file.prompts);await this.host.context().saveSettingsDebounced?.();this.assert(s);}
+                this.host.inject('');await this.persist(s,plan.archive);
+                if(Object.keys(globals).length){globalsApplied=true;await this.saveBackupGlobals(s,globals);}
+                plan.archive.pending=null;await this.persist(s,plan.archive);this.assert(s);
                 this.restoring=false;await this.refreshMemory();return plan;
             }catch(error){
                 if(hadArchive)s.metadata[KEY]=previousArchive;else delete s.metadata[KEY];
-                if(globalsApplied){for(const key of Object.keys(settings))delete settings[key];Object.assign(settings,previousSettings);this.host.context().saveSettingsDebounced?.();}
+                let globalsRollback=!globalsApplied;
+                if(globalsApplied){
+                    const desired={...globals.settings,...(globals.prompts?{prompts:globals.prompts}:{})},previous={...previousGlobals.settings,...(previousGlobals.prompts?{prompts:previousGlobals.prompts}:{})};
+                    // Preserve any newer user edit instead of overwriting it during a late rollback.
+                    if(Object.keys(desired).every(key=>JSON.stringify(settings[key])===JSON.stringify(desired[key]))){Object.assign(settings,clone(previous));try{await this.saveBackupGlobals(s,previousGlobals);globalsRollback=true;}catch{}}
+                }
                 let rollback=false;try{this.assert(s);await this.host.save();this.assert(s);const disk=await this.host.read();this.assert(s);rollback=JSON.stringify(disk.metadata?.[KEY])===JSON.stringify(previousArchive);}catch{}
                 this.restoring=false;try{this.assert(s);await this.refreshMemory();}catch{}
-                throw Error(error.message+(rollback?' Предыдущее состояние архива восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив после подключения. Незавершённая копия не внедряется до проверки.'));
+                throw Error(error.message+(rollback&&globalsRollback?' Предыдущее состояние восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив и настройки после подключения. Незавершённая копия не внедряется до проверки.'));
             }
         });
     }

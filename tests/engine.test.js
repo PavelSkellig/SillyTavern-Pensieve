@@ -13,6 +13,7 @@ function fixture() {
  const host={context:()=>c,uuid:()=>`id-${serial++}`,configuration:()=>c.chatId,count:async t=>Math.ceil(t.length/3),limits:()=>({context:32000,output:2000}),
  async generate(prompt,source){request={prompt,source}; if(onGenerate)await onGenerate();if(generateError)throw Error('Модель недоступна');return 'Результат'},
  async save(){saves++;if(saves===failSaveAt)return;disk=clone({metadata:c.chatMetadata,messages:c.chat});},
+ async saveSettings(){c.saveSettingsDebounced?.();},
  async read(){if(readFails)throw Error('Проверка не удалась');return clone(disk??{metadata:{},messages:[]});},
  async hide(start,end,unhide){for(let i=start;i<=end;i++)c.chat[i].is_system=!unhide; await host.save();},
  lock(){return ()=>{}},refresh(){},notify(){},inject(text){host.injected=text}};
@@ -248,4 +249,31 @@ test('interrupted complete-backup commit remains recoverable without touching fo
 test('restored active memory cannot duplicate unhidden source messages already present in the target chat',async()=>{
  const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};for(const m of f.c.chat){m.is_system=false;delete m.extra?.[KEY]?.exclusion;}const before=JSON.stringify(f.c.chat);
  await assert.rejects(()=>f.e.restoreBackup(copy,{activate:true}),/сообщен|исход/i);assert.deepEqual(f.c.chatMetadata,{});await f.e.restoreBackup(copy);await f.e.toggle(f.e.archive().entries[0].id,true);assert.equal((await f.e.memory()).blocked,true);assert.equal(f.host.injected,'');assert.equal(JSON.stringify(f.c.chat),before);
+});
+
+for(const exclude of [false,true])test(`retry after final readback failure reuses the same draft commit, Hide=${exclude}`,async()=>{
+ const f=fixture();f.e.settings().exclude=exclude;const d=await f.e.generateSummary(1,2),native=f.host.read;let reads=0;const final=exclude?4:3;f.host.read=async()=>{if(++reads===final)throw Error('Final read failed');return native();};
+ await assert.rejects(()=>f.e.saveDraft(d,{title:'One',text:d.text}));assert.equal(f.e.archive().pending,null);const id=f.e.archive().entries[0].id;f.host.read=native;const entry=await f.e.saveDraft(d,{title:'One',text:d.text});assert.equal(f.e.archive().entries.length,1);assert.equal(entry.id,id);assert.equal(entry.version,1);assert.equal(f.e.archive().entries.filter(e=>e.active).length,1);
+});
+test('full restore rejects malformed nested record versions before any write',async()=>{
+ for(const invalid of [{version:-2},{version:'oops'},{updatedAt:{}},{updatedAt:''}]){const f=fixture(),entry=await saved(f);const file=fullCopy(f);await f.e.restore(entry.id);file.archive.entries[0].history=[{version:1,title:'Before',text:'Before',updatedAt:'2026',...invalid}];const before=JSON.stringify([f.c.chatMetadata,f.e.settings()]),saves=f.saves;await assert.rejects(()=>f.e.restoreBackup(file,{mode:'replace',restorePrompts:true}));assert.equal(f.saves,saves);assert.equal(JSON.stringify([f.c.chatMetadata,f.e.settings()]),before);}
+});
+test('same-chat activation cannot duplicate restored visible native sources',async()=>{
+ const f=fixture(),entry=await saved(f),copy=fullCopy(f);await f.e.restore(entry.id);const before=JSON.stringify(f.c.chatMetadata),saves=f.saves;await assert.rejects(()=>f.e.restoreBackup(copy,{activate:true}),/исход|сообщен/i);assert.equal(f.saves,saves);assert.equal(JSON.stringify(f.c.chatMetadata),before);
+});
+test('a raw transcript without Pensieve UUIDs still blocks duplicate restored memory without binding',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};for(const m of f.c.chat){m.is_system=false;m.extra={};}const before=JSON.stringify(f.c.chat);await assert.rejects(()=>f.e.restoreBackup(copy,{activate:true}),/исход|сообщен/i);assert.equal(JSON.stringify(f.c.chat),before);assert.deepEqual(f.c.chatMetadata,{});
+});
+test('unknown provenance v1.5 imports cannot regenerate or restore current message UUIDs',async()=>{
+ const f=fixture(),entry=await saved(f);entry.imported=true;const before=JSON.stringify(f.c.chat),saves=f.saves;await assert.rejects(()=>f.e.generateSummary(1,2,{allowOverlap:true,replaceId:entry.id}),/исход|копи|чат/i);await assert.rejects(()=>f.e.restore(entry.id),/исход|копи|чат/i);assert.equal(f.saves,saves);assert.equal(JSON.stringify(f.c.chat),before);
+});
+test('inactive backup recovery never activates a foreign record that reuses an old active ID',async()=>{
+ const f=fixture();const entry=await saved(f),file=fullCopy(f);file.source.key='foreign';file.archive.entries[0].origin={chat:'foreign',id:entry.id};file.archive.entries[0].sourceChat='foreign';await f.e.restore(entry.id);await f.e.toggle(entry.id,true);const save=f.host.save;let attempts=0;f.host.save=async()=>{if(++attempts>1)throw Error('Offline');return save();};await assert.rejects(()=>f.e.restoreBackup(file,{mode:'replace'}));f.c.chatMetadata=clone(f.disk.metadata);f.host.save=save;await f.e.recover('restore');assert.equal(f.e.archive().entries[0].active,false);assert.equal(f.host.injected,'');
+});
+test('selected global backup sections require durable confirmation and survive journal recovery',async()=>{
+ const f=fixture();await saved(f);const file=fullCopy(f);file.prompts.summary.presets[0].text='RECOVERED RULE';const previous=JSON.stringify([f.c.chatMetadata,f.e.settings()]),save=f.host.save;let writes=0;f.host.save=async()=>{if(++writes>1)throw Error('Chat rollback offline');return save();};f.host.saveSettings=async()=>{throw Error('Settings not saved');};await assert.rejects(()=>f.e.restoreBackup(file,{restorePrompts:true}));assert.equal(JSON.stringify([f.c.chatMetadata,f.e.settings()]),previous);assert.equal(f.disk.metadata[KEY].pending.globals.prompts.summary.presets[0].text,'RECOVERED RULE');f.c.chatMetadata=clone(f.disk.metadata);f.host.save=save;let confirmed;f.host.saveSettings=async patch=>{confirmed=clone(patch);};await f.e.recover('complete');assert.equal(confirmed.prompts.summary.presets[0].text,'RECOVERED RULE');assert.equal(f.e.prompt('summary').text,'RECOVERED RULE');assert.equal(f.e.archive().pending,null);
+});
+
+test('late chat switch during global restore preserves newer user settings and never rolls back another chat',async()=>{
+ const f=fixture();await saved(f);const file=fullCopy(f);file.prompts.summary.presets[0].text='BACKUP RULE';f.host.saveSettings=async()=>{f.c.chatId='different';f.c.chatMetadata={};f.e.settings().prompts.summary.presets[0].text='NEW USER EDIT';f.e.settings().theme='light';};await assert.rejects(()=>f.e.restoreBackup(file,{restorePrompts:true}),/чат/i);assert.deepEqual(f.c.chatMetadata,{});assert.equal(f.e.prompt('summary').text,'NEW USER EDIT');assert.equal(f.e.settings().theme,'light');
 });

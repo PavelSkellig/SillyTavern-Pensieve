@@ -31,6 +31,8 @@ try{
   const {emptyArchive,captureRange,sourceRecord}=await import(root+'/src/core.js'),archive=emptyArchive('workspace');
   const make=(id,title,text,source,active)=>({id,type:'summary',title,text,order:source,active,createdAt:'2026-11-09T12:00:00.000Z',updatedAt:'2026-11-09T12:00:00.000Z',version:1,history:[],sources:captureRange(state.chat,source,source+1).map(sourceRecord),summaryIds:[],needsReview:false});
   archive.entries=[make('a','Сводка №1 — Первый разговор','ALPHA',0,false),make('b','Сводка №2 — Поиск ответов','BETA',2,false),make('c','Сводка №3 — Возвращение','GAMMA',4,true),make('d','Сводка №4 — В архиве','DELTA',6,false),{...make('arc','Арка №1 — От знакомства до решения','ARC_AB',0,true),type:'arc',sources:[],summaryIds:['a','b']}];
+  // Mirror native Hide for previously saved records, including an archived episode.
+  for(const i of [0,1,2,3,4,5,6,7])state.chat[i].is_system=true;
   state.chatMetadata.pensieve=archive;Object.assign(state.extensionSettings.pensieve,{enabled:true,inject:true,tokenLimit:6000,theme:'dark'});await core.redisplayChat({startIndex:0,fade:false});state.swipe.refresh();await state.saveChat();state.saveSettingsDebounced();await state.eventSource.emit(state.eventTypes.CHAT_CHANGED,state.chatId);
   return {avatar,chatId:state.chatId,archive:JSON.stringify(archive),prompts:JSON.stringify(state.extensionSettings.pensieve.prompts)};
  });

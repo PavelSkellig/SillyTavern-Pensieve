@@ -14,6 +14,8 @@ export const defaults = () => ({
     prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:'',history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:'',history:[]}] },volume:{selected:'default',presets:[{id:'default',name:'Основной',text:VOLUME_PROMPT,history:[]}]} },
 });
 export const emptyArchive = owner => ({version:1,owner,revision:0,entries:[],pending:null});
+// v1.5 imports have unknown provenance; matching UUIDs do not establish ownership.
+export const hasDetachedSources = entry => !!(entry?.detachedSources||entry?.imported&&!entry.sourceChat&&!entry.origin?.chat);
 
 /** 128-bit change detector; no original message text or real-world timestamps in the archive. */
 export function fingerprint(message) {
@@ -49,7 +51,7 @@ export function inspectSources(chat, sources) {
 export function findOverlaps(entries, range) {
     const ids=new Set(range.map(s=>s.id).filter(Boolean));
     const hashes=new Set(range.map(s=>s.hash));
-    return entries.filter(e=>e.type==='summary'&&!e.detachedSources&&e.sources.some(s=>s.id?ids.has(s.id):hashes.has(s.hash)));
+    return entries.filter(e=>e.type==='summary'&&!hasDetachedSources(e)&&e.sources.some(s=>s.id?ids.has(s.id):hashes.has(s.hash)));
 }
 export const chronological = entries => [...entries].sort((a,b)=>a.order-b.order||a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));
 export function memoryEntries(entries) {
@@ -58,7 +60,7 @@ export function memoryEntries(entries) {
 }
 export function memoryConflicts(entries,currentChatKey=null) {
     const active=memoryEntries(entries),index=hierarchyIndex(entries),conflicts=[];
-    const coverage=e=>{const ids=new Set([e.id,...index.descendants(e)]),keys=new Set([...ids].map(id=>'record:'+id));for(const id of ids){const record=index.byId.get(id),scope=record?.detachedSources&&record.sourceChat!==currentChatKey?record.sourceChat??record.origin?.chat??'detached':'live';for(const source of record?.sources??[])keys.add('source:'+scope+':'+(source.id||source.hash));}return keys;};
+    const coverage=e=>{const ids=new Set([e.id,...index.descendants(e)]),keys=new Set([...ids].map(id=>'record:'+id));for(const id of ids){const record=index.byId.get(id),scope=hasDetachedSources(record)&&record?.sourceChat!==currentChatKey?record.sourceChat??record.origin?.chat??'detached':'live';for(const source of record?.sources??[])keys.add('source:'+scope+':'+(source.id||source.hash));}return keys;};
     const covered=new Map(active.map(e=>[e.id,coverage(e)]));
     for(let i=0;i<active.length;i++) for(let j=i+1;j<active.length;j++) {
         const ids=covered.get(active[i].id);if([...covered.get(active[j].id)].some(id=>ids.has(id)))conflicts.push([active[i].id,active[j].id]);
@@ -66,8 +68,18 @@ export function memoryConflicts(entries,currentChatKey=null) {
     return conflicts;
 }
 export function importedSourceConflicts(entries,chat) {
-    const index=hierarchyIndex(entries),ids=new Set(memoryEntries(entries).flatMap(e=>[e.id,...index.descendants(e)])),conflicts=[];
-    for(const id of ids){const entry=index.byId.get(id);if(entry?.type!=='summary'||!entry.imported&&!entry.detachedSources)continue;for(const match of inspectSources(chat,entry.sources).matches)if(!match.message.is_system)conflicts.push({entryId:id,sourceId:match.source.id});}
+    const index=hierarchyIndex(entries),ids=new Set(memoryEntries(entries).flatMap(e=>[e.id,...index.descendants(e)])),conflicts=[];let hashes;
+    for(const id of ids){
+        const entry=index.byId.get(id);if(entry?.type!=='summary')continue;
+        // UUID matches catch partial overlap, including native records reactivated by merge.
+        const inspected=inspectSources(chat,entry.sources),visible=inspected.matches.filter(match=>!match.message.is_system);
+        if(visible.length){for(const match of visible)conflicts.push({entryId:id,sourceId:match.source.id});continue;}
+        // Fingerprints detect a copied transcript after UUIDs were stripped. Compare a whole
+        // episode sequence, not isolated common phrases. This never creates source bindings.
+        if(entry.sources.length&&entry.sources.length<=chat.length&&(hasDetachedSources(entry)||inspected.issues.length)){hashes??=chat.map(fingerprint);for(let start=0;start<=chat.length-entry.sources.length;start++)if(entry.sources.every((source,i)=>source.hash===hashes[start+i])&&entry.sources.some((_,i)=>!chat[start+i].is_system)){
+            conflicts.push({entryId:id,sourceId:entry.sources[0].id});break;
+        }}
+    }
     return conflicts;
 }
 export function memoryText(entries,settings,orderedEntries=null) {

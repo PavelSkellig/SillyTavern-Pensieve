@@ -21,6 +21,8 @@ try {
   const {emptyArchive,captureRange,sourceRecord}=await import(`${root}/src/core.js`),archive=emptyArchive('compact-qa');
   const make=(id,title,source,active)=>({id,type:'summary',title,text:`SAVED_${id}`,order:source,active,createdAt:'2026-11-09T12:00:00.000Z',updatedAt:'2026-11-09T12:00:00.000Z',version:1,history:[],sources:captureRange(state.chat,source,source+1).map(sourceRecord),summaryIds:[],needsReview:false});
   archive.entries=[make('first','Сводка №3',0,false),make('second','Сводка №1',42,false),make('last','Сводка №2',44,true),{...make('arc','Арка №1',0,true),type:'arc',sources:[],summaryIds:['first','second']}];
+  // Mirror native Hide after saved active memory; archived-only sources remain visible.
+  for(const i of [0,1,42,43,44,45])state.chat[i].is_system=true;
   state.chatMetadata.pensieve=archive;Object.assign(state.extensionSettings.pensieve,{enabled:true,inject:true,tokenLimit:6000,theme:'dark'});for(const type of ['summary','arc']){const g=state.extensionSettings.pensieve.prompts[type];g.presets.find(p=>p.id===g.selected).text=`QA ${type} {{char}}`;}
   core.changeMainAPI('openai');Object.assign(state.chatCompletionSettings,{chat_completion_source:'custom',custom_url:'http://127.0.0.1:1/v1',custom_model:'qa-test',openai_max_context:32000,openai_max_tokens:2000,stream_openai:false});core.setOnlineStatus('Valid');
   await core.redisplayChat({startIndex:0,fade:false});state.swipe.refresh();await state.saveChat();state.saveSettingsDebounced();await state.eventSource.emit(state.eventTypes.CHAT_CHANGED,state.chatId);

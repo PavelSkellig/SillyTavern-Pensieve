@@ -35,6 +35,7 @@ try {
    const root='/scripts/extensions/third-party/SillyTavern-Pensieve';
    const {Engine}=await import(`${root}/src/engine.js`),{createHost}=await import(`${root}/src/host.js`),chats=await import('/scripts/chats.js');
    window.qaEngine=new Engine(createHost(()=>SillyTavern.getContext(),core,chats));window.qaChat=live.chatId;
+   Object.assign(live.extensionSettings.pensieve,{enabled:true,inject:true,exclude:true,previewEpisodes:true,tokenLimit:6000,collapse:false,theme:'dark'});
    live.extensionSettings.pensieve.prompts.summary.presets[0].text='Промпт сводки: {{char}}. Сохрани события.';
    live.extensionSettings.pensieve.prompts.arc.presets[0].text='Промпт арки: {{user}}. Объедини выбранное.';
    for(const type of ['summary','arc'])live.extensionSettings.pensieve.prompts[type].selected=live.extensionSettings.pensieve.prompts[type].presets[0].id;

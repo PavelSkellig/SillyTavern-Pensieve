@@ -47,3 +47,7 @@ test('export/import through an intermediate chat preserves the original detached
 test('duplicate origin identities in a file are rejected rather than silently dropping a distinct record',()=>{
  const f=fixture(),file=backup.createBackup(f.archive,f.settings,f.source);file.archive.entries[7].origin=structuredClone(file.archive.entries[0].origin);assert.throws(()=>backup.parseBackup(JSON.stringify(file)));
 });
+
+test('v1.5 imported records with unknown provenance remain detached through full export',()=>{
+ const f=fixture();f.archive.entries.forEach(e=>e.imported=true);const before=JSON.stringify(f.archive),file=backup.createBackup(f.archive,f.settings,f.source);assert.ok(file.archive.entries.every(e=>e.detachedSources&&e.sourceChat!=='origin'&&e.origin.chat!=='origin'));assert.equal(JSON.stringify(f.archive),before);const plan=backup.planRestore(f.archive,file,{targetKey:'origin',uuid:()=> 'unused'});assert.equal(plan.added,0);assert.ok(plan.archive.entries.every(e=>e.detachedSources));
+});

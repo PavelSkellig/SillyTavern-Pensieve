@@ -30,3 +30,7 @@ test('group readback uses group chat ID and metadata header',async()=>{
  const host=createHost(()=>f.c,{}, {}, async(url,options)=>{request={url,body:JSON.parse(options.body)};return {ok:true,json:async()=>[{chat_metadata:{pensieve:{entries:[]}}},{mes:'test'}]}});
  const disk=await host.read();assert.equal(request.url,'/api/chats/group/get');assert.deepEqual(request.body,{id:'story'});assert.equal(disk.messages.length,1);
 });
+
+test('settings persistence verifies actual ST readback instead of trusting a debounce or swallowed error',async()=>{
+ const c={getRequestHeaders:()=>({}),extensionSettings:{pensieve:{inject:true}}};let stored={inject:false},writes=0;const core={saveSettings:async()=>{writes++;}},host=createHost(()=>c,core,{},async()=>({ok:true,json:async()=>({settings:JSON.stringify({extension_settings:{pensieve:stored}})})}));await assert.rejects(()=>host.saveSettings({inject:true}),/настрой|сохран/i);core.saveSettings=async()=>{writes++;stored={inject:true};};await host.saveSettings({inject:true});assert.equal(writes,2);
+});

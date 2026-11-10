@@ -1,4 +1,4 @@
-import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint} from './core.js';
+import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint,hasDetachedSources} from './core.js';
 import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
@@ -378,8 +378,8 @@ export class UI {
         if(state.gate==='blocked')heading.append(el('span',{class:'pv-gate-status'},this.lastMemory.limitExceeded?'Не помещается в лимит':'Не внедряется: блокировка'));
         const details=el('details',{class:'pv-entry-more'}),more=el('summary',{'aria-label':`Дополнительные действия: ${display}`},activeView?'Дополнительно':'···');details.append(more);
         if(state.note)details.append(el('p',{class:'pv-status-note'},state.note));
-        if(e.detachedSources)details.append(el('p',{class:'pv-muted'},e.type==='summary'?'Источники относятся к сохранённой копии: они не привязаны к сообщениям этого чата. Доступны текст и редактирование; восстановление или перегенерация по чужим исходникам невозможны.':'Диапазон относится к сохранённой копии. Перегенерация использует тексты дочерних записей из архива.'));
-        if(e.type==='summary'&&!e.detachedSources) {
+        if(hasDetachedSources(e))details.append(el('p',{class:'pv-muted'},e.type==='summary'?'Источники относятся к сохранённой копии: они не привязаны к сообщениям этого чата. Доступны текст и редактирование; восстановление или перегенерация по чужим исходникам невозможны.':'Диапазон относится к сохранённой копии. Перегенерация использует тексты дочерних записей из архива.'));
+        if(e.type==='summary'&&!hasDetachedSources(e)) {
             const inspected=inspectSources(this.e.host.context().chat,e.sources);
             if(inspected.issues.length){heading.append(el('small',{class:'pv-gate-status'},`Требуют проверки источники: ${inspected.issues.length}`));details.append(el('p',{class:'pv-warning'},`Источники изменены, удалены или недоступны: ${inspected.issues.length}. Память требует проверки.`));}
             else if(inspected.matches.some(x=>x.moved))details.append(el('p',{class:'pv-muted'},'Номера сообщений изменились; источники найдены по постоянным ID.'));
@@ -407,7 +407,7 @@ export class UI {
     async regenerateEntry(e) {
         if(e.type==='volume')return this.generating(()=>this.e.generateVolume(e.chapterIds,{replaceId:e.id}));
         if(e.type==='arc')return this.generating(()=>this.e.generateArc(e.summaryIds,{replaceId:e.id}));
-        if(e.detachedSources)throw Error('Исходники этой копии относятся к другому чату или отсутствуют. Откройте сохранённый текст; для новых сообщений создайте новый эпизод.');
+        if(hasDetachedSources(e))throw Error('Исходники этой копии относятся к другому чату или отсутствуют. Откройте сохранённый текст; для новых сообщений создайте новый эпизод.');
         const inspected=inspectSources(this.e.host.context().chat,e.sources);
         if(inspected.issues.length)throw Error('Исходные сообщения изменены или удалены. Выберите новый диапазон вручную.');
         const indices=inspected.matches.map(x=>x.index).sort((a,b)=>a-b);
@@ -486,12 +486,13 @@ export class UI {
         }))));
         if(!archive)return;
         const recovery=el('details',{class:'pv-recovery'});recovery.append(el('summary',{},'Восстановление'));archiveGroup.append(recovery);
-        recovery.append(row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button('Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
+        if(archive.pending?.type==='backup')recovery.append(el('p',{class:'pv-muted'},'Завершение повторно проверит целую копию и выбранные промпты/настройки. «Оставить копию в архиве без активности» сохранит её тексты, отключит все записи и вернёт выбранные общие разделы в состояние до восстановления. Прежний архив после подтверждённой замены это действие не возвращает.'));
+        recovery.append(row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button(archive.pending?.type==='backup'?'Оставить копию в архиве без активности':'Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
         recovery.append(button('Восстановить все исходники',()=>this.act(async()=>{
             const session=this.e.session();
             if(!await this.confirm('Восстановление всех исходников','Вернуть исключённые этим расширением сообщения и отключить всю память текущего чата?',session))return;
             this.e.assert(session);
-            let issues=0;for(const e of [...this.e.archive(session).entries])if(e.type==='summary'&&!e.detachedSources){this.e.assert(session);const r=await this.e.restore(e.id);issues+=r.issues.length;}
+            let issues=0;for(const e of [...this.e.archive(session).entries])if(e.type==='summary'&&!hasDetachedSources(e)){this.e.assert(session);const r=await this.e.restore(e.id);issues+=r.issues.length;}
             this.e.assert(session);
             await this.e.disableAll();this.showNotice(issues?`Не удалось надёжно восстановить источники: ${issues}. Их состояние сохранено.`:'Исходники восстановлены. Архив сохранён.');
         })));
@@ -505,17 +506,34 @@ export class UI {
     }
     restoreBackupDialog(file,session) {
         this.e.assert(session);const {dialog,body}=this.makeDialog('Восстановление памяти',true);dialog.classList.add('pv-backup-dialog');
-        const counts=Object.entries(LEVELS).map(([type,level])=>`${level.plural}: ${file.archive.entries.filter(e=>e.type===type).length}`).join(' · '),current=this.e.archive(session),plan=planRestore(current,file,{targetKey:session.key,uuid:()=>this.e.host.uuid(),chat:this.e.host.context().chat});
-        body.append(el('h3',{},'Найдено: '+counts),el('p',{class:'pv-muted'},`Новых: ${plan.added} · Уже есть: ${plan.skipped} · Отличаются от текущих: ${plan.conflicts}. При объединении существующие тексты сохраняются.`),el('p',{class:'pv-muted'},'Копия не восстанавливает исходную переписку. Чужие диапазоны останутся историческими сведениями и не будут управлять сообщениями этого чата.'));
+        const counts=Object.entries(LEVELS).map(([type,level])=>`${level.plural}: ${file.archive.entries.filter(e=>e.type===type).length}`).join(' · '),current=this.e.archive(session),preview=el('p',{class:'pv-muted'});
+        body.append(el('h3',{},'Найдено: '+counts),preview,el('p',{class:'pv-muted'},'Копия не восстанавливает исходную переписку. Чужие диапазоны останутся историческими сведениями и не будут управлять сообщениями этого чата.'));
         const mode=el('select',{'aria-label':'Способ восстановления'});mode.append(el('option',{value:'merge'},'Объединить с существующими'),el('option',{value:'replace'},'Заменить архив из резервной копии'));body.append(field('Способ восстановления',mode));
-        const check=(name,disabled=false)=>{const input=el('input',{type:'checkbox','aria-label':name});input.disabled=disabled;const label=el('label');label.append(input,document.createTextNode(name));body.append(label);return input;};
+        const check=(name,disabled=false)=>{const input=el('input',{type:'checkbox','aria-label':name});input.dataset.unavailable=String(disabled);input.disabled=disabled;const label=el('label');label.append(input,document.createTextNode(name));body.append(label);return input;};
         const active=check('Восстановить активные записи',!!file.source.hadPendingOperation),prompts=check('Восстановить промпты из копии',!file.prompts),settings=check('Восстановить общие настройки из копии',!file.settings);
         body.append(el('p',{class:'pv-muted'},'По умолчанию новые записи останутся в архиве. Активность проверяется по пересечениям и лимиту. Промпты и общие настройки используются и другими чатами — они изменятся только при выбранных флажках.'));
         if(file.source.hadPendingOperation)body.append(el('p',{class:'pv-warning'},'Копия сделана при незавершённой операции. Сначала восстановите её без активности.'));
-        const replacement=el('div',{class:'pv-warning',hidden:'true'}),ack=el('input',{type:'checkbox','aria-label':'Подтверждаю замену текущего архива'}),ackLabel=el('label');ackLabel.append(ack,document.createTextNode('Подтверждаю замену текущего архива'));replacement.append(el('p',{},'Замена удалит текущие записи из архива этого чата. Сначала можно сохранить их отдельную копию.'),button('Сохранить текущую копию',()=>this.act(()=>this.exportFullBackup())),ackLabel);body.append(replacement);
-        const status=el('p',{role:'status'});body.append(status);let applying=false;
-        const save=button('Восстановить память',async()=>{if(applying)return;applying=true;save.disabled=true;status.textContent='Проверка и восстановление…';try{this.e.assert(session);const result=await this.e.restoreBackup(file,{mode:mode.value,activate:active.checked,restorePrompts:prompts.checked,restoreSettings:settings.checked},session);dialog.close();this.e.host.notify('success',`Память восстановлена. Новых записей: ${result.added}; уже существовали: ${result.skipped}.`);await this.refresh(true);}catch(error){status.textContent='Не удалось подтвердить восстановление: '+error.message;this.e.host.notify('error',error.message);}finally{applying=false;update();}},true);
-        const update=()=>{replacement.hidden=mode.value!=='replace';save.disabled=applying||mode.value==='replace'&&!ack.checked;};mode.onchange=ack.onchange=update;body.append(row(save,button('Отмена',()=>dialog.close())));dialog.onclose=()=>dialog.remove();update();dialog.showModal();
+        const replacement=el('div',{class:'pv-warning',hidden:'true'}),ack=el('input',{type:'checkbox','aria-label':'Подтверждаю замену текущего архива'}),ackLabel=el('label'),exportCurrent=button('Сохранить текущую копию',()=>this.act(()=>{this.e.assert(session);this.exportFullBackup();}));ackLabel.append(ack,document.createTextNode('Подтверждаю замену текущего архива'));replacement.append(el('p',{},'Замена удалит текущие записи из архива этого чата. Сначала можно сохранить их отдельную копию.'),exportCurrent,ackLabel);body.append(replacement);
+        const status=el('p',{role:'status'}),cancel=button('Отмена',()=>{if(!applying)dialog.close();}),close=dialog.querySelector('.pv-header button');body.append(status);let applying=false,planError=false;
+        const save=button('Восстановить память',async()=>{
+            if(applying||planError||mode.value==='replace'&&!ack.checked)return;
+            const options={mode:mode.value,activate:active.checked,restorePrompts:prompts.checked,restoreSettings:settings.checked};
+            applying=true;update();status.textContent='Проверка и восстановление… Дождитесь завершения; окно можно закрыть после результата.';
+            try{this.e.assert(session);const result=await this.e.restoreBackup(file,options,session);dialog.close();this.e.host.notify('success',`Память восстановлена. Новых записей: ${result.added}; уже существовали: ${result.skipped}.`);await this.refresh(true);}
+            catch(error){status.textContent='Не удалось подтвердить восстановление: '+error.message;this.e.host.notify('error',error.message);}
+            finally{applying=false;update();}
+        },true);
+        const update=()=>{
+            replacement.hidden=mode.value!=='replace';save.disabled=applying||planError||mode.value==='replace'&&!ack.checked;
+            for(const control of [mode,ack,cancel,close,exportCurrent])control.disabled=applying;
+            for(const control of [active,prompts,settings])control.disabled=applying||control.dataset.unavailable==='true';
+        };
+        const planMode=()=>{
+            try{const plan=planRestore(current,file,{targetKey:session.key,mode:mode.value,uuid:()=>this.e.host.uuid(),chat:this.e.host.context().chat});preview.textContent=`Новых: ${plan.added} · Уже есть: ${plan.skipped} · Отличаются от текущих: ${plan.conflicts}. При объединении существующие тексты сохраняются.`;planError=false;}
+            catch(error){preview.textContent=(mode.value==='merge'?'Объединение недоступно: ':'Замена недоступна: ')+error.message;planError=true;}
+            update();
+        };
+        mode.onchange=planMode;ack.onchange=update;body.append(row(save,cancel));dialog.oncancel=event=>{if(applying)event.preventDefault();};dialog.onclose=()=>dialog.remove();planMode();dialog.showModal();
     }
     makeDialog(title,chatScoped=false) {
         const dialog=el('dialog',{class:'pensieve pv-editor','data-theme':this.e.settings().theme});
@@ -560,7 +578,7 @@ export class UI {
         body.append(field('Название',title),field('Текст',text));
         const range=this.sourceRanges?.get(entry.id),details=el('div',{class:'pv-record-info'}),state=this.viewState?.byId.get(entry.id);
         const info=el('p',{class:'pv-muted'},`${range?`${range.historical?'Исторические сообщения':'Сообщения'} ${range.start+1}–${range.end+1}`:'Порядок источников требует проверки'} · Версия ${entry.version}`);details.append(info);
-        if(entry.detachedSources)details.append(el('p',{class:'pv-muted'},'Исторический диапазон из резервной копии. Исходники не привязаны к текущему чату.'));
+        if(hasDetachedSources(entry))details.append(el('p',{class:'pv-muted'},'Исторический диапазон из резервной копии. Исходники не привязаны к текущему чату.'));
         this.e.host.count(entry.text).then(n=>info.append(document.createTextNode(` · ≈${n} токенов`))).catch(()=>{});
         if(state)details.append(el('p',{class:'pv-status-note'},[state.label,state.note].filter(Boolean).join(' · ')));body.prepend(details);
         if(entry.type!=='summary')body.append(button('Показать содержимое',()=>{this.e.assert(session);this.showContents(entry);}));
@@ -595,7 +613,7 @@ export class UI {
         const c=this.e.host.context(),settings=this.e.settings(),processed=new Map();
         if(this.rangeChatKey===this.e.key())this.resolveRange();
         const valid=this.rangeChatKey===this.e.key()&&Number.isInteger(this.start)&&Number.isInteger(this.end)&&this.start>=0&&this.end>=this.start&&this.end<c.chat.length;
-        for(const e of archive.entries.filter(e=>e.type==='summary'&&!e.detachedSources))for(const s of e.sources){if(!processed.has(s.id))processed.set(s.id,[]);processed.get(s.id).push(e.title);}
+        for(const e of archive.entries.filter(e=>e.type==='summary'&&!hasDetachedSources(e)))for(const s of e.sources){if(!processed.has(s.id))processed.set(s.id,[]);processed.get(s.id).push(e.title);}
         for(const node of document.querySelectorAll('#chat .mes[mesid]')) {
             const index=Number(node.getAttribute('mesid')),m=c.chat[index];if(!m)continue;
             const menu=node.querySelector('.extraMesButtons');

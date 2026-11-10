@@ -46,6 +46,14 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch) {
             } finally {c.eventSource.removeListener(event,literal);}
         },
         save:()=>context().saveMetadata(),
+        async saveSettings(expected) {
+            if(typeof core.saveSettings!=='function')throw Error('SillyTavern не поддерживает проверяемое сохранение настроек.');
+            await core.saveSettings();
+            const response=await fetcher('/api/settings/get',{method:'POST',headers:context().getRequestHeaders(),cache:'no-store',body:'{}'});
+            if(!response.ok)throw Error('Не удалось проверить сохранение настроек на сервере.');
+            const data=await response.json(),stored=JSON.parse(data.settings).extension_settings?.pensieve;
+            if(!stored||Object.keys(expected).some(key=>JSON.stringify(stored[key])!==JSON.stringify(expected[key])))throw Error('Сервер не подтвердил сохранение промптов или настроек. Повторите восстановление после подключения.');
+        },
         async read() {
             const c=context(),group=c.groupId!=null,character=c.characters[c.characterId];
             const body=group?{id:c.chatId}:{ch_name:character?.name,file_name:c.chatId,avatar_url:character?.avatar};

@@ -1,4 +1,4 @@
-import {clone,bytes,validateArchive,MAX_ARCHIVE_BYTES,fingerprint,inspectSources,memoryEntries} from './core.js';
+import {clone,bytes,validateArchive,MAX_ARCHIVE_BYTES,fingerprint,inspectSources,memoryEntries,hasDetachedSources} from './core.js';
 import {childrenIds,hierarchyIndex} from './hierarchy.js';
 
 const ownObject=value=>value&&typeof value==='object'&&!Array.isArray(value);
@@ -24,10 +24,14 @@ export function validateBackupSettings(value) {
     if(value.ui!==undefined){if(!ownObject(value.ui)||typeof value.ui.drawerExpanded!=='boolean')throw Error('Повреждены настройки интерфейса.');result.ui={drawerExpanded:value.ui.drawerExpanded};}
     return result;
 }
+const UNKNOWN_SOURCE='pensieve:unknown-import';
+const originOf=(entry,chat)=>entry.origin??{chat:entry.imported&&!entry.sourceChat?UNKNOWN_SOURCE:entry.sourceChat??chat,id:entry.id};
+const detachLegacy=entry=>{if(entry.imported&&!entry.origin?.chat&&!entry.sourceChat){entry.detachedSources=true;entry.origin={chat:UNKNOWN_SOURCE,id:entry.id};entry.sourceChat=UNKNOWN_SOURCE;}return entry;};
+const strictHistories=archive=>{if(!Array.isArray(archive?.entries))return;for(const entry of archive.entries)if(Array.isArray(entry?.history))for(const h of entry.history)if(!ownObject(h)||!Number.isSafeInteger(h.version)||h.version<1||typeof h.updatedAt!=='string'||!h.updatedAt.trim()||h.updatedAt.length>100)throw Error('Повреждена история версий записи в резервной копии.');};
 export function createBackup(archive,settings,source) {
     if(!ownObject(source)||typeof source.key!=='string'||!source.key)throw Error('Не удалось определить исходный чат резервной копии.');
     const data=validateArchive(archive),configuration={...settings,previewEpisodes:settings.previewEpisodes??true};
-    data.entries.forEach(e=>{e.origin??={chat:source.key,id:e.id};e.sourceChat??=source.key;});
+    data.entries.forEach(e=>{detachLegacy(e);e.origin??=originOf(e,source.key);e.sourceChat??=e.origin.chat;});
     const result={format:'pensieve-backup',version:1,exportedAt:new Date().toISOString(),source:{key:source.key,name:typeof source.name==='string'?source.name:'',hadPendingOperation:!!archive.pending},archive:data,prompts:validatePromptGroups(settings.prompts),settings:validateBackupSettings(configuration)};
     if(bytes(result)>MAX_ARCHIVE_BYTES*4)throw Error('Полная резервная копия превышает предел 80 MiB.');return result;
 }
@@ -38,21 +42,21 @@ export function parseBackup(text) {
     if(file?.format!=='pensieve-backup'||file.version!==1)throw Error('Неподдерживаемый формат резервной копии «Омута памяти».');
     if(!ownObject(file.source)||!requireString(file.source.key,'исходный чат',10000))throw Error('В копии отсутствует исходный чат.');
     const source={key:file.source.key,name:requireString(file.source.name??'','название чата',2000),hadPendingOperation:!!file.source.hadPendingOperation};
-    const archive=validateArchive(file.archive),origins=new Set();for(const entry of archive.entries){const key=JSON.stringify([entry.origin?.chat??source.key,entry.origin?.id??entry.id]);if(origins.has(key))throw Error('В копии повторяется происхождение разных записей. Восстановление отменено.');origins.add(key);}
+    strictHistories(file.archive);const archive=validateArchive(file.archive),origins=new Set();for(const entry of archive.entries){const key=JSON.stringify([entry.origin?.chat??source.key,entry.origin?.id??entry.id]);if(origins.has(key))throw Error('В копии повторяется происхождение разных записей. Восстановление отменено.');origins.add(key);}
     return {format:'pensieve-backup',version:1,exportedAt:requireString(file.exportedAt,'дата копии',100),source,archive,prompts:validatePromptGroups(file.prompts),settings:validateBackupSettings(file.settings)};
 }
-const identity=(entry,chat)=>JSON.stringify([entry.origin?.chat??chat,entry.origin?.id??entry.id]);
+const identity=(entry,chat)=>JSON.stringify([originOf(entry,chat).chat,originOf(entry,chat).id]);
 const content=(entry,entries,chat)=>JSON.stringify([entry.type,entry.title,entry.text,entry.version,entry.sources.map(s=>[s.id,s.hash,s.index,s.previousHidden]),entry.history.map(h=>[h.version,h.title,h.text,h.updatedAt]),childrenIds(entry).map(id=>{const child=entries.find(e=>e.id===id);return child?identity(child,chat):id;})]);
 export function planRestore(current,backup,{targetKey,mode='merge',activate=false,uuid,chat=[]}={}) {
     if(!['merge','replace'].includes(mode)||typeof targetKey!=='string'||!targetKey)throw Error('Некорректный способ восстановления.');
-    const incoming=validateArchive(backup.archive),archive=mode==='replace'?{...clone(current),entries:[],pending:null}:clone(current),byOrigin=new Map(archive.entries.map(e=>[identity(e,targetKey),e])),used=new Set(archive.entries.map(e=>e.id)),map=new Map(),add=[],matched=[];
+    const incoming=validateArchive(backup.archive),archive=mode==='replace'?{...clone(current),entries:[],pending:null}:clone(current),byOrigin=new Map(archive.entries.map(detachLegacy).map(e=>[identity(e,targetKey),e])),used=new Set(archive.entries.map(e=>e.id)),map=new Map(),add=[],matched=[];
     let skipped=0,conflicts=0,detached=0;
     for(const entry of incoming.entries){
-        const origin=entry.origin??{chat:backup.source.key,id:entry.id},key=JSON.stringify([origin.chat,origin.id]),existing=byOrigin.get(key);
+        const origin=originOf(entry,backup.source.key),key=JSON.stringify([origin.chat,origin.id]),existing=byOrigin.get(key);
         if(existing){if(existing.type!==entry.type)throw Error('Копия меняет уровень уже существующей записи.');map.set(entry.id,existing.id);skipped++;if(content(existing,archive.entries,targetKey)!==content(entry,incoming.entries,backup.source.key))conflicts++;matched.push([existing,entry]);continue;}
         let id=entry.id;if(used.has(id)){if(typeof uuid!=='function')throw Error('Не удалось переназначить ID.');let attempts=0;do{id=uuid();if(++attempts>100)throw Error('Не удалось получить уникальный ID.');}while(used.has(id));}
         if(typeof id!=='string'||!id)throw Error('Некорректный новый ID записи.');used.add(id);map.set(entry.id,id);
-        const sourceChat=entry.sourceChat??backup.source.key,foreign=!!entry.detachedSources||sourceChat!==targetKey||entry.type==='summary'&&inspectSources(chat,entry.sources).issues.length>0;
+        const sourceChat=entry.sourceChat??origin.chat,foreign=hasDetachedSources(entry)||sourceChat!==targetKey||entry.type==='summary'&&inspectSources(chat,entry.sources).issues.length>0;
         const copy={...clone(entry),id,origin:clone(origin),sourceChat,detachedSources:foreign,backupActive:entry.backupActive??entry.active,active:false,imported:true};if(foreign)detached++;add.push(copy);byOrigin.set(key,copy);matched.push([copy,entry]);
     }
     for(const entry of add){const original=incoming.entries.find(e=>map.get(e.id)===entry.id);entry.summaryIds=original.summaryIds.map(id=>map.get(id));if(entry.type==='volume')entry.chapterIds=original.chapterIds.map(id=>map.get(id));}

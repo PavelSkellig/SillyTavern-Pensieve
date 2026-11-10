@@ -1,3 +1,4 @@
+import {hasDetachedSources} from './core.js';
 import {childrenIds} from './hierarchy.js';
 /** Resolve narrative positions from current source UUIDs. Never parse story dates or write metadata. */
 export function narrativeOrder(entries,allEntries,chat) {
@@ -21,7 +22,7 @@ export function narrativeOrder(entries,allEntries,chat) {
             positions=children.flatMap(range=>[range.start,range.end]);
         } else {
             if(!Array.isArray(entry.sources)||!entry.sources.length)return null;
-            historical=!!entry.detachedSources;
+            historical=hasDetachedSources(entry);
             positions=entry.sources.map(source=>historical?source.index:sourceIndices.get(source.id));
             if(positions.some(index=>!Number.isInteger(index)))return null;
         }
