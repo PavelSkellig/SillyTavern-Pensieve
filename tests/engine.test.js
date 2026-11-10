@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as module from '../src/engine.js';
 import {KEY, defaults, clone, memoryEntries, fingerprint} from '../src/core.js';
+import {createBackup} from '../src/backup.js';
 
 function fixture() {
  let serial=0,disk=null,saves=0,failSaveAt=0,readFails=false,generateError=false,request=null,onGenerate=null;
@@ -207,4 +208,40 @@ test('confirmed child deletion can unlink a source from a three-child parent wit
 test('new automatic volume numbers do not reuse an existing visible number after deletion',async()=>{
  const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(d,{title:'Том №2 — Сохранённый',text:'VOLUME'});await f.e.toggle(v.id,false);
  const next=await f.e.generateVolume(pair.map(e=>e.id));assert.equal(next.title,'Том №3');
+});
+
+const fullCopy=f=>createBackup(f.e.archive(),f.e.settings(),{key:f.e.key(),name:f.c.chatId});
+test('preview setting upgrades once, defaults on, and preserves an explicit false',()=>{
+ const f=fixture();delete f.e.settings().previewEpisodes;let saves=0;f.c.saveSettingsDebounced=()=>saves++;assert.equal(f.e.settings().previewEpisodes,true);f.e.settings().previewEpisodes=false;assert.equal(f.e.settings().previewEpisodes,false);assert.equal(saves,1);
+});
+test('full restore into a foreign chat is default-inactive, idempotent and cannot regenerate or restore matching foreign source UUIDs',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};for(const m of f.c.chat){m.is_system=false;delete m.extra?.[KEY]?.exclusion;}const chat=JSON.stringify(f.c.chat),settings=JSON.stringify(f.e.settings());
+ const plan=await f.e.restoreBackup(copy,{mode:'merge'});assert.equal(plan.added,1);const entry=f.e.archive().entries[0];assert.equal(entry.active,false);assert.equal(entry.detachedSources,true);assert.equal(entry.backupActive,true);assert.equal(f.host.injected,'');assert.equal(JSON.stringify(f.c.chat),chat);assert.equal(JSON.stringify(f.e.settings()),settings);
+ assert.equal((await f.e.restoreBackup(copy,{mode:'merge'})).added,0);assert.equal(f.e.archive().entries.length,1);await assert.rejects(()=>f.e.restore(entry.id),/друг|источ|копи/i);await assert.rejects(()=>f.e.generateSummary(1,2,{replaceId:entry.id,allowOverlap:true}),/друг|источ|копи/i);assert.equal(JSON.stringify(f.c.chat),chat);
+});
+test('explicit backup activation and optional globals restore only the saved effective roots',async()=>{
+ const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id));await f.e.saveDraft(d,{title:'V',text:'ONLY_VOLUME'});const copy=fullCopy(f);copy.settings.tokenLimit=12000;copy.prompts.volume.presets[0].text='RESTORED RULE';f.c.chatId='new';f.c.chatMetadata={};f.c.chat=[];let settingsSaved=0;f.c.saveSettingsDebounced=()=>settingsSaved++;
+ await f.e.restoreBackup(copy,{mode:'replace',activate:true,restorePrompts:true,restoreSettings:true});assert.equal(f.e.settings().tokenLimit,12000);assert.equal(f.e.prompt('volume').text,'RESTORED RULE');assert.ok(f.host.injected.includes('ONLY_VOLUME'));assert.equal(f.e.archive().entries.filter(e=>e.active).length,1);assert.equal(settingsSaved,1);
+});
+test('invalid backup configuration and activation overflow never partially change archive or global presets',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f),before=JSON.stringify([f.c.chatMetadata,f.e.settings()]),saves=f.saves;copy.prompts.arc.presets[0].history=[42];await assert.rejects(()=>f.e.restoreBackup(copy,{mode:'replace'}));assert.equal(JSON.stringify([f.c.chatMetadata,f.e.settings()]),before);assert.equal(f.saves,saves);
+ const valid=fullCopy(f);valid.settings.tokenLimit=1;await assert.rejects(()=>f.e.restoreBackup(valid,{mode:'merge',activate:true,restoreSettings:true}),/лимит|токен|контекст/i);assert.equal(JSON.stringify([f.c.chatMetadata,f.e.settings()]),before);assert.equal(f.saves,saves);
+});
+test('unconfirmed backup save rolls back previous local archive and leaves globals unchanged',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f);copy.archive.entries[0].text='BACKUP TEXT';copy.prompts.summary.presets[0].text='BACKUP RULE';const before=JSON.stringify([f.c.chatMetadata,f.e.settings()]);f.failSaveAt=f.saves+1;
+ await assert.rejects(()=>f.e.restoreBackup(copy,{mode:'replace',restorePrompts:true}));assert.equal(JSON.stringify([f.c.chatMetadata,f.e.settings()]),before);assert.equal(f.disk.metadata[KEY].entries[0].text,'Результат');
+});
+test('chat switch during backup preflight cannot commit or roll back into the next chat',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f),native=f.host.count;let once=true;f.host.count=async text=>{if(once){once=false;f.c.chatId='different';f.c.chatMetadata={};}return native(text);};await assert.rejects(()=>f.e.restoreBackup(copy,{mode:'merge',activate:true}),/чат/i);assert.deepEqual(f.c.chatMetadata,{});
+});
+test('overlapping episode versions block memory instead of injecting the same event twice',async()=>{
+ const f=fixture();await saved(f,1,3);const d=await f.e.generateSummary(2,4,{allowOverlap:true});await f.e.saveDraft(d,{title:'Version',text:'SECOND'});assert.equal((await f.e.memory()).blocked,true);assert.equal(f.host.injected,'');
+});
+test('normal generation cannot inject a backup while the final archive readback is still pending',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};f.c.chat=[];const native=f.host.read;let reads=0,release,reached;const gate=new Promise(r=>release=r),waiting=new Promise(r=>reached=r);f.host.read=async()=>{if(++reads===2){reached();await gate;}return native();};
+ const task=f.e.restoreBackup(copy,{activate:true});await waiting;const interim=await f.e.refreshMemory(),injected=f.host.injected;release();await task;assert.equal(interim.blocked,true);assert.equal(injected,'');assert.ok(f.host.injected.includes('Результат'));
+});
+test('interrupted complete-backup commit remains recoverable without touching foreign source messages',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};f.c.chat=[];const save=f.host.save;let attempts=0;f.host.save=async()=>{if(++attempts>1)throw Error('Offline');return save();};
+ await assert.rejects(()=>f.e.restoreBackup(copy,{activate:true}));assert.equal(f.disk.metadata[KEY].pending.type,'backup');f.c.chatMetadata=clone(f.disk.metadata);f.host.save=save;await f.e.recover('complete');assert.equal(f.e.archive().pending,null);assert.equal(f.e.archive().entries.length,1);assert.ok(f.host.injected.includes('Результат'));assert.deepEqual(f.c.chat,[]);
 });

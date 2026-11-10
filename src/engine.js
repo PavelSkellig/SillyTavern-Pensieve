@@ -1,13 +1,15 @@
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
 import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
+import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
     settings() {
         const c=this.host.context();
         c.extensionSettings[KEY]??=defaults();const settings=c.extensionSettings[KEY];
-        if(settings.prompts&&!Object.hasOwn(settings.prompts,'volume')){settings.prompts.volume=defaults().prompts.volume;c.saveSettingsDebounced?.();}
+        let changed=false;if(settings.prompts&&!Object.hasOwn(settings.prompts,'volume')){settings.prompts.volume=defaults().prompts.volume;changed=true;}
+        if(!Object.hasOwn(settings,'previewEpisodes')){settings.previewEpisodes=true;changed=true;}if(changed)c.saveSettingsDebounced?.();
         return settings;
     }
     key(c=this.host.context()) {return JSON.stringify([c.groupId??null,c.characters[c.characterId]?.avatar??null,c.chatId]);}
@@ -69,6 +71,7 @@ export class Engine {
         return this.run(async()=>{
             const s=this.session();if(this.archive(s).pending)throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(this.archive(s).entries,range);
+            if(replaceId&&this.archive(s).entries.find(e=>e.id===replaceId)?.detachedSources)throw Error('Источники этой копии относятся к другому чату. Создайте отдельный новый эпизод.');
             if(overlaps.length&&!allowOverlap)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
             if(replaceId&&!overlaps.some(e=>e.id===replaceId))throw Error('Запись для замены не связана с диапазоном.');
             return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Эпизод №${nextNumber('summary',this.archive(s).entries)}`,order:start});
@@ -141,6 +144,7 @@ export class Engine {
     async completePending(s) {
         this.assert(s);
         const archive=this.archive(s),pending=archive.pending;if(!pending)return {issues:[]};
+        if(pending.type==='backup'){await this.persist(s,archive);archive.pending=null;await this.persist(s,archive);return {issues:[]};}
         const entry=archive.entries.find(e=>e.id===pending.entryId);if(!entry)throw Error('Журнал ссылается на отсутствующую запись. Экспортируйте архив и обратитесь за восстановлением.');
         if(pending.type==='restore')return this.restoreInternal(s,entry);
         // Recovery must pass the same durability gate as the first attempt.
@@ -213,6 +217,7 @@ export class Engine {
         return this.run(async()=>{
             const s=this.session(),archive=clone(this.archive(s)),entry=archive.entries.find(e=>e.id===id);
             if(!entry||entry.type!=='summary')throw Error('Выберите эпизод для восстановления исходников.');
+            if(entry.detachedSources)throw Error('Исходники восстановленной копии принадлежат другому чату или отсутствуют. Сообщения текущего чата не изменены.');
             if(archive.pending)throw Error('Сначала восстановите незавершённую операцию.');
             archive.pending={type:'restore',entryId:id};await this.persist(s,archive);
             const result=await this.restoreInternal(s,entry);await this.refreshMemory();return result;
@@ -221,6 +226,7 @@ export class Engine {
     async recover(mode) {
         return this.run(async()=>{
             const s=this.session(),archive=this.archive(s);
+            if(mode==='restore'&&archive.pending?.type==='backup'){const previous=new Set(archive.pending.previousActive??[]);archive.entries.forEach(e=>e.active=previous.has(e.id));archive.pending=null;await this.persist(s,archive);await this.refreshMemory();return {issues:[]};}
             if(mode==='restore'&&archive.pending) {archive.pending.type='restore';await this.persist(s,archive);}
             const result=archive.pending?await this.completePending(s):await this.persist(s,archive);
             await this.refreshMemory();return result;
@@ -258,13 +264,47 @@ export class Engine {
             a.entries=result.entries;a.pending=null;
         });
     }
+    async restoreBackup(backup,options={},session=null) {
+        return this.run(async()=>{
+            const s=session??this.session();this.assert(s);
+            const file=backup?.legacy?parseBackup(JSON.stringify({format:'pensieve',version:1,archive:backup.archive})):parseBackup(JSON.stringify(backup));
+            if(backup?.source?.hadPendingOperation)file.source.hadPendingOperation=true;
+            const mode=options.mode??'merge',current=this.archive(s),settings=this.settings();
+            if(current.pending)throw Error('Сначала завершите незавершённую операцию памяти.');
+            if(mode==='replace'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.length))throw Error('Перед заменой архива восстановите собственные исключения сообщений. Объединение доступно без этого.');
+            if(options.restorePrompts&&!file.prompts||options.restoreSettings&&!file.settings)throw Error('В этой прежней копии нет выбранных промптов или настроек.');
+            const candidateSettings={...clone(settings),...(options.restoreSettings?validateBackupSettings(file.settings):{}),prompts:options.restorePrompts?validatePromptGroups(file.prompts):clone(settings.prompts)};
+            const stamp=JSON.stringify([s.metadata[KEY]??null,settings]),previousSettings=clone(settings),previousArchive=s.metadata[KEY],hadArchive=Object.hasOwn(s.metadata,KEY);
+            const plan=planRestore(current,file,{targetKey:s.key,mode,activate:options.activate===true,uuid:()=>this.host.uuid(),chat:s.chat});
+            if(options.activate){
+                const ordered=narrativeOrder(memoryEntries(plan.archive.entries),plan.archive.entries,s.chat),text=memoryText(plan.archive.entries,candidateSettings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
+                const limits=this.host.limits();if(memoryConflicts(plan.archive.entries,s.key).length)throw Error('Восстановление активности создаёт пересечения памяти. Восстановите записи без активности.');
+                if(!Number.isFinite(tokens)||tokens>candidateSettings.tokenLimit||text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context))throw Error('Активная копия превышает лимит токенов или контекст модели. Восстановите без активности либо измените лимит.');
+            }
+            this.assert(s);if(stamp!==JSON.stringify([s.metadata[KEY]??null,settings]))throw Error('Память или настройки изменились во время проверки. Повторите восстановление.');
+            // A durable marker blocks all injection until both complete-archive writes verify.
+            plan.archive.pending={type:'backup',previousActive:current.entries.filter(e=>e.active).map(e=>e.id)};
+            let globalsApplied=false;this.restoring=true;
+            try{
+                this.host.inject('');await this.persist(s,plan.archive);plan.archive.pending=null;await this.persist(s,plan.archive);this.assert(s);
+                if(options.restorePrompts||options.restoreSettings){globalsApplied=true;if(options.restoreSettings)Object.assign(settings,clone(file.settings));if(options.restorePrompts)settings.prompts=clone(file.prompts);await this.host.context().saveSettingsDebounced?.();this.assert(s);}
+                this.restoring=false;await this.refreshMemory();return plan;
+            }catch(error){
+                if(hadArchive)s.metadata[KEY]=previousArchive;else delete s.metadata[KEY];
+                if(globalsApplied){for(const key of Object.keys(settings))delete settings[key];Object.assign(settings,previousSettings);this.host.context().saveSettingsDebounced?.();}
+                let rollback=false;try{this.assert(s);await this.host.save();this.assert(s);const disk=await this.host.read();this.assert(s);rollback=JSON.stringify(disk.metadata?.[KEY])===JSON.stringify(previousArchive);}catch{}
+                this.restoring=false;try{this.assert(s);await this.refreshMemory();}catch{}
+                throw Error(error.message+(rollback?' Предыдущее состояние архива восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив после подключения. Незавершённая копия не внедряется до проверки.'));
+            }
+        });
+    }
     async memory() {
         const s=this.session(),settings=this.settings(),archive=this.archive(s),entries=archive.entries;
         const ordered=narrativeOrder(memoryEntries(entries),entries,s.chat);
         const text=memoryText(entries,settings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
-        const conflicts=memoryConflicts(entries),enabled=settings.enabled&&settings.inject;
+        const conflicts=memoryConflicts(entries,s.key),enabled=settings.enabled&&settings.inject;
         const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
-        const blocked=enabled&&(!!archive.pending||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
+        const blocked=enabled&&(!!this.restoring||!!archive.pending||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
         return {text,tokens,conflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':conflicts.length?'Активные главы или тома пересекаются с другими записями. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     refreshMemory() {

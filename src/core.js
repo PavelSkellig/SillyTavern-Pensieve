@@ -56,9 +56,9 @@ export function memoryEntries(entries) {
     const index=hierarchyIndex(entries),active=entries.filter(e=>e.active),replaced=new Set(active.flatMap(e=>[...index.descendants(e)]));
     return chronological(active.filter(e=>!replaced.has(e.id)));
 }
-export function memoryConflicts(entries) {
+export function memoryConflicts(entries,currentChatKey=null) {
     const active=memoryEntries(entries),index=hierarchyIndex(entries),conflicts=[];
-    const coverage=e=>{const ids=new Set([e.id,...index.descendants(e)]),keys=new Set([...ids].map(id=>'record:'+id));for(const id of ids)for(const source of index.byId.get(id)?.sources??[])keys.add('source:'+(source.id||source.hash));return keys;};
+    const coverage=e=>{const ids=new Set([e.id,...index.descendants(e)]),keys=new Set([...ids].map(id=>'record:'+id));for(const id of ids){const record=index.byId.get(id),scope=record?.detachedSources&&record.sourceChat!==currentChatKey?record.sourceChat??record.origin?.chat??'detached':'live';for(const source of record?.sources??[])keys.add('source:'+scope+':'+(source.id||source.hash));}return keys;};
     const covered=new Map(active.map(e=>[e.id,coverage(e)]));
     for(let i=0;i<active.length;i++) for(let j=i+1;j<active.length;j++) {
         const ids=covered.get(active[i].id);if([...covered.get(active[j].id)].some(id=>ids.has(id)))conflicts.push([active[i].id,active[j].id]);
