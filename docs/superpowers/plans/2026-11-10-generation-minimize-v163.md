@@ -15,8 +15,9 @@
 - No generation/storage/prompt/memory-format rewrite; all source Hide happens only through verified save.
 
 ## Task 1
-- [ ] RED browser case for minus on delayed episode request, then all3 levels/ready hidden/restore/error retry/cancel/preview-off autosave/chat switch and unchanged archive before confirmation.
-- [ ] Add controller and minimal UI integrations/styles, preserving existing preview. Node checks and Chromium/WebKit actual-ST regressions.
+- [x] RED browser case for minus on delayed episode request, then all3 levels/ready hidden/restore/error retry/cancel/preview-off autosave/chat switch and unchanged archive before confirmation.
+- [x] Add controller and minimal UI integrations/styles, preserving existing preview. Node checks and Chromium/WebKit actual-ST regressions.
 ## Task 2
-- [ ] Independent read-only review; material fixes RED→GREEN, screenshots/docs.
-- [ ] Version1.6.3, main/tag publication, public manifest and clean clone checks.
+- [x] Independent read-only review; material fixes RED→GREEN, screenshots/docs.
+- [x] Version1.6.3 and release verification prepared.
+- Release gate: main/tag atomic publication, public manifest and clean clone checks; results recorded in the release session.

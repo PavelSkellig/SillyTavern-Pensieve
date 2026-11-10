@@ -125,9 +125,9 @@ export class UI {
         try{return await this.act(async()=>{
             const session=this.e.session();if(this.rangeChatKey!==session.key)throw Error('Выберите диапазон в текущем чате.');this.resolveRange();
             const range=captureRange(this.e.host.context().chat,this.start,this.end);if(findOverlaps(this.e.archive(session).entries,range).length)throw Error('Диапазон уже обработан. Для отдельной версии или замены используйте форму эпизода на главной странице.');
-            const start=this.start,end=this.end,node=[...document.querySelectorAll('#chat .mes[mesid]')].find(n=>Number(n.getAttribute('mesid'))===end);
+            const end=this.end,node=[...document.querySelectorAll('#chat .mes[mesid]')].find(n=>Number(n.getAttribute('mesid'))===end);
             progress=el('div',{class:'pv-chat-progress',role:'status'},'Создаётся эпизод…');(node?.querySelector('.mes_block')??node)?.append(progress);this.decorateMessages();
-            return this.generating(()=>{this.e.assert(session);this.e.checkRange(session,range);return this.e.generateSummary(start,end);},{inline:true,episode:true,waitForPreview:true,type:'summary'});
+            return this.generating(()=>this.generateCapturedRange(session,range),{inline:true,episode:true,waitForPreview:true,type:'summary'});
         });}finally{progress?.remove();this.episodeTask=false;this.decorateMessages();}
     }
     async episodeSaved(draft) {
@@ -320,7 +320,7 @@ export class UI {
             if(this.start===null||this.end===null)throw Error('Сначала выберите обе границы.');
             if(overlaps.length&&options.value!=='block'&&!await this.confirm('Повторная обработка','Этот диапазон уже представлен в архиве. Продолжить выбранным способом?'))return;
             const session=this.e.session(),start=this.start,end=this.end,range=captureRange(this.e.host.context().chat,start,end),mode=options.value;
-            await this.generating(()=>{this.e.assert(session);this.e.checkRange(session,range);return this.e.generateSummary(start,end,{allowOverlap:mode!=='block',replaceId:['block','version'].includes(mode)?null:mode});},{episode:true,type:'summary'});
+            await this.generating(()=>this.generateCapturedRange(session,range,{allowOverlap:mode!=='block',replaceId:['block','version'].includes(mode)?null:mode}),{episode:true,type:'summary'});
         }),true),button('Сбросить диапазон',()=>{this.clearRange();this.decorateMessages();this.render();})));
         form.append(el('p',{class:'pv-muted'},'После генерации проверьте и сохраните текст. Только затем исходные сообщения будут исключены из контекста.'));
     }
@@ -432,7 +432,7 @@ export class UI {
         const indices=inspected.matches.map(x=>x.index).sort((a,b)=>a-b);
         if(indices.at(-1)-indices[0]+1!==indices.length)throw Error('Исходники больше не образуют непрерывный диапазон. Выберите новый диапазон вручную.');
         const range=captureRange(this.e.host.context().chat,indices[0],indices.at(-1));
-        return this.generating(()=>{this.e.assert(session);this.e.checkRange(session,range);return this.e.generateSummary(indices[0],indices.at(-1),{allowOverlap:true,replaceId:e.id});},{episode:true,type:'summary'});
+        return this.generating(()=>this.generateCapturedRange(session,range,{allowOverlap:true,replaceId:e.id}),{episode:true,type:'summary'});
     }
     setMemoryEnabled(enabled) {
         return this.act(()=>{const settings=this.e.settings();settings.inject=enabled;if(enabled)settings.enabled=true;this.e.host.context().saveSettingsDebounced();});
@@ -573,11 +573,15 @@ export class UI {
         return new Promise(resolve=>{const {dialog,body}=this.makeDialog('Импорт архива',!!session);body.append(el('p',{},'Объединить с текущим архивом или заменить его? Импорт не исключает сообщения.'),row(button('Объединить',()=>{dialog.returnValue='merge';dialog.close();},true),button('Заменить',()=>{dialog.returnValue='replace';dialog.close();}),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const mode=['merge','replace'].includes(dialog.returnValue)?dialog.returnValue:null;dialog.remove();resolve(mode);};dialog.showModal();});
     }
     textDialog(title,text) {const {dialog,body}=this.makeDialog(title);const area=el('textarea',{readonly:'true','aria-label':title},text);body.append(area,row(button('Скопировать',()=>this.act(()=>copy(text))),button('Закрыть',()=>dialog.close())));dialog.onclose=()=>dialog.remove();dialog.showModal();}
+    generateCapturedRange(session,range,options={}) {
+        this.e.checkRange(session,range);
+        return this.e.generateSummary(session.chat.indexOf(range[0].ref),session.chat.indexOf(range.at(-1).ref),options);
+    }
     async generating(fn,options={}) {
         this.generationView??=new GenerationView(this.e,{
             makeDialog:(...args)=>this.makeDialog(...args),preview:draft=>{const done=this.preview(draft);return {done,dialog:this.editor};},
             onSaved:async draft=>{await this.episodeSaved(draft);await this.refresh(true);},
-            onMinimize:()=>{if(this.panel?.open)this.minimize();if(this.restoreDock&&this.windowState==='minimized')this.restoreDock.hidden=true;},
+            onMinimize:(explicit=true)=>{if(explicit&&this.panel?.open)this.minimize();if(this.restoreDock&&this.windowState==='minimized')this.restoreDock.hidden=true;},
             onClear:()=>{if(this.restoreDock)this.restoreDock.hidden=this.windowState!=='minimized';},
         });
         return this.generationView.generate(fn,options);
