@@ -46,8 +46,8 @@ try {
  await page.waitForTimeout(1200);await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-toggle'));await page.waitForTimeout(700);await loadFixture();await showSettings();
  assert.equal(await header.getAttribute('aria-expanded'),'true','reload restores expanded drawer');assert.equal(await content.isVisible(),true);
  await page.evaluate(()=>{
-    window.qaOpenCount=0;const original=HTMLDialogElement.prototype.showModal;
-    HTMLDialogElement.prototype.showModal=function(...args){if(this.id==='pensieve-panel')window.qaOpenCount++;return original.apply(this,args);};
+    window.qaOpenCount=0;const original=HTMLDialogElement.prototype.show;
+    HTMLDialogElement.prototype.show=function(...args){if(this.id==='pensieve-panel')window.qaOpenCount++;return original.apply(this,args);};
  });
  const items=[['pensieve-settings-home','home'],['pensieve-settings-archive','archive'],['pensieve-settings-memory','memory'],['pensieve-settings-prompts','prompts'],['pensieve-settings-options','settings']];
  for(const [id,tab]of items)for(const hit of ['icon','text','padding']) {
@@ -55,7 +55,7 @@ try {
     const control=page.locator(`#${id}`);await control.scrollIntoViewIfNeeded();
     const position=await control.evaluate((n,hit)=>{
        const r=n.getBoundingClientRect(),child=n.querySelector(hit==='icon'?'i':'span').getBoundingClientRect();
-       return hit==='padding'?{x:r.width-5,y:r.height/2}:{x:child.x-r.x+Math.min(child.width/2,12),y:child.y-r.y+child.height/2};
+       return hit==='padding'?{x:4,y:r.height/2}:{x:child.x-r.x+Math.min(child.width/2,12),y:child.y-r.y+child.height/2};
     },hit);
     const before=await page.evaluate(()=>qaOpenCount);await control.tap({position});
     const panel=page.locator('#pensieve-panel');await panel.waitFor({state:'visible'});
@@ -77,7 +77,7 @@ try {
  await page.evaluate(async()=>{const root='/scripts/extensions/third-party/SillyTavern-Pensieve/src/',{UI}=await import(root+'ui.js'),{Engine}=await import(root+'engine.js'),{createHost}=await import(root+'host.js'),core=await import('/script.js'),chats=await import('/scripts/chats.js');const ui=new UI(new Engine(createHost(()=>SillyTavern.getContext(),core,chats)));await ui.mountSettingsDrawer();await ui.mountSettingsDrawer();});
  assert.equal(await page.locator('#pensieve-settings').count(),1);assert.equal(await content.locator('button').count(),5);
  const shared=page.locator('#pensieve-panel');
- for(const [id,tab]of items){await page.locator('#pensieve-settings-home').tap();await shared.locator('[data-tab="archive"]').tap();const opens=await page.evaluate(()=>qaOpenCount);await page.locator('#'+id).evaluate(n=>{n.click();n.click();});assert.equal(await page.evaluate(()=>qaOpenCount),opens);assert.equal(await shared.locator('[data-tab="'+tab+'"]').getAttribute('aria-current'),'page');await shared.locator('[data-action="minimize"]').tap();await showSettings();await page.locator('#'+id).tap();assert.equal(await shared.locator('[data-tab="'+tab+'"]').getAttribute('aria-current'),'page');assert.equal(await page.locator('#pensieve-restore-dock').isVisible(),false);assert.equal(await page.locator('#pensieve-panel').count(),1);await shared.locator('[data-action="close"]').tap();await showSettings();}
+ for(const [id,tab]of items){await page.locator('#pensieve-settings-home').tap();await shared.locator('[data-tab="archive"]').tap();const opens=await page.evaluate(()=>qaOpenCount);await showSettings();await page.locator('#'+id).tap();await showSettings();await page.locator('#'+id).tap();assert.equal(await page.evaluate(()=>qaOpenCount),opens);assert.equal(await shared.locator('[data-tab="'+tab+'"]').getAttribute('aria-current'),'page');await shared.locator('[data-action="minimize"]').tap();await showSettings();await page.locator('#'+id).tap();assert.equal(await shared.locator('[data-tab="'+tab+'"]').getAttribute('aria-current'),'page');assert.equal(await page.locator('#pensieve-restore-dock').isVisible(),false);assert.equal(await page.locator('#pensieve-panel').count(),1);await shared.locator('[data-action="close"]').tap();await showSettings();}
  await page.screenshot({path:`work/screenshots/tab-menu-${engine}.png`,scale:'css'});
  await page.locator('#pensieve-settings-home').tap();await page.locator('#pensieve-panel [data-tab="prompts"]').tap();await page.setViewportSize({width:390,height:420});
  const shortPanel=page.locator('#pensieve-panel');

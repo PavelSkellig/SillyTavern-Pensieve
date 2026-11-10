@@ -417,3 +417,6 @@
 @media(max-width:400px){.pensieve .pv-complete-backup button{font-size:12px;padding:7px 5px}}
 
 #pensieve-menu-open:hover{background:#213b5b;border-color:#b79c73}#pensieve-menu-open:active{background:#263f60}#pensieve-menu-open:focus-visible{outline:2px solid #b79c73;outline-offset:2px}
+
+/* The shared main window leaves ST navigation actionable; editors remain native modals. */
+#pensieve-panel{position:fixed;inset:calc(var(--topBarBlockSize,40px) + 6px) 0 6px;margin:0 auto;z-index:3000;height:calc(100dvh - var(--topBarBlockSize,40px) - 12px);max-height:calc(100dvh - var(--topBarBlockSize,40px) - 12px)}

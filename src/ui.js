@@ -37,8 +37,9 @@ export class UI {
         const composer=document.getElementById('send_form');
         if(composer)composer.before(this.restoreDock);else this.panel.before(this.restoreDock);
         if(!head.querySelector('.pv-sky')){const sky=el('div',{class:'pv-sky','aria-hidden':'true'});for(const name of ['hills','bridge','castle','eagle','sky-line'])sky.append(el('span',{class:'pv-'+name}));head.prepend(sky);}
-        // Keep ST's document-wide drawer handlers out of this native modal's click path.
+        // Keep ST's document-wide drawer handlers out of this window's click path.
         this.panel.addEventListener('click',event=>event.stopPropagation());
+        this.panel.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();this.close();}});
         this.panel.addEventListener('close',()=>{
             // close is queued by the browser; a rapid restore may already have reopened it.
             if(this.panel.open)return;
@@ -160,6 +161,8 @@ export class UI {
         for(const [id,label,glyph,action]of items) {
             const control=button('',event=>{
                 event.stopPropagation();this.returnFocus=event.currentTarget;action();
+                const settingsDrawer=document.querySelector('#extensions-settings-button .drawer-content');
+                if(settingsDrawer?.classList.contains('openDrawer'))document.querySelector('#extensions-settings-button .drawer-toggle')?.click();
             });control.id=id;control.className='pv-settings-action';
             control.append(el('i',{class:`fa-solid ${glyph}`,'aria-hidden':'true'}),el('span',{},label));
             actions.append(control);
@@ -190,20 +193,24 @@ export class UI {
         catch(error){this.showNotice(error.message);this.e.host.notify('error',error.message);await this.refresh(false).catch(()=>{});return null;}
     }
     open(tab=this.tab) {
-        const resume=this.windowState==='minimized'&&tab===this.tab;
-        const current=this.panel.open&&tab===this.tab&&this.content.dataset.ready==='true'&&(tab==='prompts'||this.isCurrentSession())&&!this.resumeDirty;
+        const force=this.windowState==='closed'||this.windowState==='minimized'&&tab!=='prompts';
         this.windowState='open';this.restoreDock.hidden=true;
-        if(!this.panel.open)this.panel.showModal();
-        if(current)return;
+        if(!this.panel.open)this.panel.show();
         // ST replaces chat metadata before emitting CHAT_CHANGED. Check the live
         // session synchronously, including during a pending chat network request.
-        if(!resume||(tab!=='prompts'&&(this.resumeDirty||!this.isCurrentSession())))this.go(tab);
+        this.go(tab,force);
         this.resumeDirty=false;
     }
     minimize() {if(!this.panel.open)return;this.windowState='minimized';this.restoreDock.hidden=false;this.panel.close();}
     restore() {this.open();}
     close() {this.windowState='closed';this.restoreDock.hidden=true;this.panel.close();}
     isCurrentSession() {try{if(!this.renderSession)return false;this.e.assert(this.renderSession);return true;}catch{return false;}}
+    canReuseView(tab) {
+        if(this.content.dataset.view!==tab||this.content.dataset.ready!=='true')return false;
+        if(tab==='prompts')return true;
+        if(tab==='settings'&&!this.renderSession){try{this.e.session();return false;}catch{return true;}}
+        return this.isCurrentSession()&&!this.resumeDirty;
+    }
     rememberView() {
         if(this.content.dataset.ready!=='true')return;
         const editor=this.promptEditor;
@@ -221,6 +228,7 @@ export class UI {
     }
     restoreView() {
         this.content.dataset.ready='true';
+        this.resumeDirty=false;
         const saved=this.workspaceViews?.get(JSON.stringify([this.renderSession?.key??null,this.tab]));if(!saved)return;
         const overlap=this.content.querySelector('[aria-label="Повторная обработка"]');if(overlap&&[...overlap.options].some(o=>o.value===saved.overlap))overlap.value=saved.overlap;
         const preview=this.content.querySelector('.pv-preview-details');if(preview)preview.open=saved.preview;
@@ -228,9 +236,9 @@ export class UI {
         for(const details of this.content.querySelectorAll('[data-entry-id] .pv-entry-more'))details.open=saved.openEntries.includes(details.closest('[data-entry-id]').dataset.entryId);
         this.content.scrollTop=saved.scroll;
     }
-    go(tab) {this.tab=tab;this.showNotice('');this.render().catch(error=>this.showNotice(error.message));}
+    go(tab,force=false) {if(!force&&this.canReuseView(tab))return;this.tab=tab;this.showNotice('');this.render().catch(error=>this.showNotice(error.message));}
     async refresh(render=false) {
-        if(this.windowState==='minimized')this.resumeDirty=true;
+        if(this.windowState!=='open')this.resumeDirty=true;
         const tab=this.tab;
         this.panel.dataset.theme=this.e.settings().theme;
         const memory=await this.e.refreshMemory();this.lastMemory=memory;this.decorateMessages();
@@ -460,7 +468,7 @@ export class UI {
         text.classList.add('pv-prompt-text');
         const editorHead=el('div',{class:'pv-prompt-heading'});editorHead.append(el('span',{},'Ваш промпт'),iconButton('Развернуть редактор',()=>this.expandPrompt(text),'fa-expand'));
         this.content.append(field('Пресет',select),editorHead,field(`Ваш промпт ${LEVELS[type].genitive}`,text),el('p',{class:'pv-muted'},'Текст используется буквально, включая Markdown и {{макросы}}. Расширение не навязывает структуру воспоминания. Сохраните изменения перед генерацией.'));
-        this.content.append(row(button('Сохранить промпт',()=>{preset.history.push(preset.text);preset.text=text.value;editor.base=preset.text;this.promptDrafts?.delete(key);this.saveSettings();this.showNotice('Промпт сохранён.');},true),button('Новый пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(!name)return;const p={id:this.e.host.uuid(),name,text:text.value,history:[]};group.presets.push(p);group.selected=p.id;this.saveSettings();})),button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){preset.name=name;this.saveSettings();}})),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;this.saveSettings();}}))));
+        this.content.append(row(button('Сохранить промпт',()=>{preset.history.push(preset.text);preset.text=text.value;editor.base=preset.text;this.promptDrafts?.delete(key);this.saveSettings();this.showNotice('Промпт сохранён.');},true),button('Новый пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(!name)return;const p={id:this.e.host.uuid(),name,text:text.value,history:[]};group.presets.push(p);group.selected=p.id;this.saveSettings();})),button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){preset.name=name;this.saveSettings();}})),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;text.value=previous;editor.base=previous;this.promptDrafts?.delete(key);this.saveSettings();}}))));
         this.content.append(row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;this.showNotice('Текст загружен в редактор. Нажмите «Сохранить промпт».');}}catch(error){this.showNotice(error.message);}}),button('Экспорт .txt',()=>download(`pensieve-prompt-${type}.txt`,text.value,'text/plain')),button('Удалить пресет',()=>this.act(async()=>{if(group.presets.length<2)throw Error('Последний пресет удалить нельзя.');if(await this.confirm('Удаление пресета','Удалить выбранный пресет?')){group.presets=group.presets.filter(p=>p.id!==preset.id);group.selected=group.presets[0].id;this.saveSettings();}}))));
     }
     expandPrompt(text) {
