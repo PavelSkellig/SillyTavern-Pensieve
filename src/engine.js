@@ -1,11 +1,14 @@
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
 import {narrativeOrder} from './order.js';
+import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
     settings() {
         const c=this.host.context();
-        c.extensionSettings[KEY]??=defaults();return c.extensionSettings[KEY];
+        c.extensionSettings[KEY]??=defaults();const settings=c.extensionSettings[KEY];
+        if(settings.prompts&&!Object.hasOwn(settings.prompts,'volume')){settings.prompts.volume=defaults().prompts.volume;c.saveSettingsDebounced?.();}
+        return settings;
     }
     key(c=this.host.context()) {return JSON.stringify([c.groupId??null,c.characters[c.characterId]?.avatar??null,c.chatId]);}
     session() {
@@ -26,7 +29,7 @@ export class Engine {
     cancel() {this.cancelled=true;this.host.cancel?.();}
     prompt(type) {
         const p=this.settings().prompts[type],preset=p.presets.find(x=>x.id===p.selected);
-        if(!preset?.text.trim())throw Error(`Сначала сохраните свой промпт ${type==='arc'?'арки':'сводки'} в разделе «Промпты».`);
+        if(!preset?.text.trim())throw Error(`Сначала сохраните свой промпт ${LEVELS[type].genitive} в разделе «Промпты».`);
         return preset;
     }
     checkRange(s,range) {
@@ -42,7 +45,7 @@ export class Engine {
         if(draft.type==='summary') {this.checkRange(s,draft.range);source=sourceText(draft.range);}
         else {
             const entries=this.archive(s).entries;
-            const chosen=draft.summaryIds.map(id=>entries.find(e=>e.id===id));
+            const chosen=childrenIds(draft).map(id=>entries.find(e=>e.id===id));
             if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные сводки изменились. Выберите их заново.');
             source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
         }
@@ -68,17 +71,21 @@ export class Engine {
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(this.archive(s).entries,range);
             if(overlaps.length&&!allowOverlap)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
             if(replaceId&&!overlaps.some(e=>e.id===replaceId))throw Error('Запись для замены не связана с диапазоном.');
-            return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Сводка №${this.archive(s).entries.filter(e=>e.type==='summary').length+1}`,order:start});
+            return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Эпизод №${this.archive(s).entries.filter(e=>e.type==='summary').length+1}`,order:start});
         });
     }
-    async generateArc(ids,{replaceId=null}={}) {
+    generateArc(ids,options={}) {return this.generateCollection('arc',ids,options);}
+    generateVolume(ids,options={}) {return this.generateCollection('volume',ids,options);}
+    async generateCollection(type,ids,{replaceId=null}={}) {
         return this.run(async()=>{
             const s=this.session(),entries=this.archive(s).entries;
             if(this.archive(s).pending)throw Error('Сначала завершите незавершённую операцию.');
-            if(ids.length<2||new Set(ids).size!==ids.length)throw Error('Выберите не менее двух разных сводок.');
+            if(!Array.isArray(ids)||ids.length<2||new Set(ids).size!==ids.length)throw Error('Выберите не менее двух разных исходных записей.');
             const chosen=ids.map(id=>entries.find(e=>e.id===id));
-            if(chosen.some(e=>e?.type!=='summary'))throw Error('Арку можно создать только из существующих сводок.');
-            return this.generateDraft({session:s,type:'arc',summaryIds:[...ids],sourceVersions:chosen.map(e=>e.version),replaceId,title:`Арка №${entries.filter(e=>e.type==='arc').length+1}`,order:Math.min(...chosen.map(e=>e.order))});
+            if(chosen.some(e=>e?.type!==LEVELS[type].sourceType))throw Error('Выбран неверный уровень или отсутствующая исходная запись.');
+            if(replaceId&&entries.find(e=>e.id===replaceId)?.type!==type)throw Error('Тип заменяемой записи не совпадает.');
+            const links=type==='volume'?{chapterIds:[...ids],summaryIds:[]}:{summaryIds:[...ids]};
+            return this.generateDraft({session:s,type,...links,sourceVersions:chosen.map(e=>e.version),replaceId,title:`${LEVELS[type].name} №${entries.filter(e=>e.type===type).length+1}`,order:Math.min(...chosen.map(e=>e.order))});
         });
     }
     async regenerate(draft) {return this.run(()=>this.generateDraft(draft));}
@@ -109,7 +116,7 @@ export class Engine {
                 // Replacement keeps the same provenance; extending an existing range is a separate version.
                 if(old&&(old.sources.length!==draft.range.length||old.sources.some((x,i)=>x.id!==draft.range[i].id)))throw Error('Для замены выберите ровно исходные сообщения этой сводки. Для другого диапазона сохраните отдельную версию.');
             } else {
-                if(draft.summaryIds.some((id,i)=>archive.entries.find(e=>e.id===id)?.version!==draft.sourceVersions[i]))throw Error('Исходные сводки изменились. Повторите генерацию.');
+                if(childrenIds(draft).some((id,i)=>archive.entries.find(e=>e.id===id)?.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Повторите генерацию.');
             }
             const now=new Date().toISOString();
             const entry=old?reviseEntry(archive.entries,old.id,{title,text}):{
@@ -118,7 +125,12 @@ export class Engine {
             };
             entry.active=true;entry.preset=draft.preset;
             if(draft.type==='summary')entry.sources=draft.range.map(sourceRecord);
-            else {entry.summaryIds=[...draft.summaryIds];for(const e of archive.entries)if(entry.summaryIds.includes(e.id))e.active=false;}
+            else {
+                if(draft.type==='volume')entry.chapterIds=[...draft.chapterIds];else entry.summaryIds=[...draft.summaryIds];
+                entry.needsReview=entry.needsReview||childrenIds(entry).some(id=>archive.entries.find(e=>e.id===id)?.needsReview);
+                const replaced=draft.type==='volume'?hierarchyIndex(archive.entries).descendants(entry):new Set(childrenIds(entry));
+                for(const e of archive.entries)if(replaced.has(e.id))e.active=false;
+            }
             if(!old)archive.entries.push(entry);
             archive.pending={type:draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id};
             await this.persist(s,archive,disk=>entry.type!=='summary'||inspectSources(disk.messages,entry.sources).issues.length===0);
@@ -222,16 +234,17 @@ export class Engine {
         });
     }
     edit(id,patch) {return this.change(a=>reviseEntry(a.entries,id,patch));}
-    toggle(id,active) {return this.change(a=>{const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');e.active=active;});}
+    toggle(id,active) {return this.change(a=>{const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');if(e.type==='volume'){const covered=hierarchyIndex(a.entries).descendants(e);for(const child of a.entries)if(covered.has(child.id))child.active=false;}e.active=active;});}
     disableAll() {return this.change(a=>a.entries.forEach(e=>e.active=false));}
     deleteEntry(id,restoreSummaries=false) {
         return this.change((a,s)=>{
             const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');
+            if(a.entries.some(parent=>childrenIds(parent).includes(id)))throw Error('Запись входит в связанную главу или том. Сначала удалите родительскую запись; её содержимое останется в архиве.');
             if(e.type==='summary') {
                 if(a.entries.some(x=>x.summaryIds.includes(id)))throw Error('Сводка связана с аркой. Сначала удалите соответствующие арки.');
                 if(s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.includes(id)))throw Error('Сначала восстановите исходники сводки. Для изменённых источников верните исходный ответ и повторите восстановление.');
             }
-            if(e.type==='arc'&&restoreSummaries)for(const source of a.entries)if(e.summaryIds.includes(source.id))source.active=true;
+            if(e.type!=='summary'&&restoreSummaries)for(const source of a.entries)if(childrenIds(e).includes(source.id))source.active=true;
             a.entries=a.entries.filter(x=>x.id!==id);
         });
     }
@@ -249,7 +262,7 @@ export class Engine {
         const conflicts=memoryConflicts(entries),enabled=settings.enabled&&settings.inject;
         const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
         const blocked=enabled&&(!!archive.pending||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        return {text,tokens,conflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':conflicts.length?'Активные арки пересекаются. Отключите одну из них.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+        return {text,tokens,conflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':conflicts.length?'Активные главы или тома пересекаются с другими записями. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     refreshMemory() {
         const epoch=++this.memoryEpoch;
