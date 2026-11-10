@@ -2,6 +2,7 @@ import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHI
 import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
+import {importedSourceConflicts} from './core.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
@@ -279,6 +280,7 @@ export class Engine {
             if(options.activate){
                 const ordered=narrativeOrder(memoryEntries(plan.archive.entries),plan.archive.entries,s.chat),text=memoryText(plan.archive.entries,candidateSettings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
                 const limits=this.host.limits();if(memoryConflicts(plan.archive.entries,s.key).length)throw Error('Восстановление активности создаёт пересечения памяти. Восстановите записи без активности.');
+                if(importedSourceConflicts(plan.archive.entries,s.chat).length)throw Error('В текущем чате уже есть исходные сообщения копии. Восстановите без активности или сначала вручную исключите эти сообщения штатными средствами SillyTavern.');
                 if(!Number.isFinite(tokens)||tokens>candidateSettings.tokenLimit||text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context))throw Error('Активная копия превышает лимит токенов или контекст модели. Восстановите без активности либо измените лимит.');
             }
             this.assert(s);if(stamp!==JSON.stringify([s.metadata[KEY]??null,settings]))throw Error('Память или настройки изменились во время проверки. Повторите восстановление.');
@@ -302,10 +304,10 @@ export class Engine {
         const s=this.session(),settings=this.settings(),archive=this.archive(s),entries=archive.entries;
         const ordered=narrativeOrder(memoryEntries(entries),entries,s.chat);
         const text=memoryText(entries,settings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
-        const conflicts=memoryConflicts(entries,s.key),enabled=settings.enabled&&settings.inject;
+        const conflicts=memoryConflicts(entries,s.key),sourceConflicts=importedSourceConflicts(entries,s.chat),enabled=settings.enabled&&settings.inject;
         const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
-        const blocked=enabled&&(!!this.restoring||!!archive.pending||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        return {text,tokens,conflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':conflicts.length?'Активные главы или тома пересекаются с другими записями. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+        const blocked=enabled&&(!!this.restoring||!!archive.pending||sourceConflicts.length>0||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
+        return {text,tokens,conflicts,sourceConflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     refreshMemory() {
         const epoch=++this.memoryEpoch;

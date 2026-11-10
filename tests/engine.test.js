@@ -245,3 +245,7 @@ test('interrupted complete-backup commit remains recoverable without touching fo
  const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};f.c.chat=[];const save=f.host.save;let attempts=0;f.host.save=async()=>{if(++attempts>1)throw Error('Offline');return save();};
  await assert.rejects(()=>f.e.restoreBackup(copy,{activate:true}));assert.equal(f.disk.metadata[KEY].pending.type,'backup');f.c.chatMetadata=clone(f.disk.metadata);f.host.save=save;await f.e.recover('complete');assert.equal(f.e.archive().pending,null);assert.equal(f.e.archive().entries.length,1);assert.ok(f.host.injected.includes('Результат'));assert.deepEqual(f.c.chat,[]);
 });
+test('restored active memory cannot duplicate unhidden source messages already present in the target chat',async()=>{
+ const f=fixture();await saved(f);const copy=fullCopy(f);f.c.chatId='new';f.c.chatMetadata={};for(const m of f.c.chat){m.is_system=false;delete m.extra?.[KEY]?.exclusion;}const before=JSON.stringify(f.c.chat);
+ await assert.rejects(()=>f.e.restoreBackup(copy,{activate:true}),/сообщен|исход/i);assert.deepEqual(f.c.chatMetadata,{});await f.e.restoreBackup(copy);await f.e.toggle(f.e.archive().entries[0].id,true);assert.equal((await f.e.memory()).blocked,true);assert.equal(f.host.injected,'');assert.equal(JSON.stringify(f.c.chat),before);
+});

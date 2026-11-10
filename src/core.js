@@ -65,6 +65,11 @@ export function memoryConflicts(entries,currentChatKey=null) {
     }
     return conflicts;
 }
+export function importedSourceConflicts(entries,chat) {
+    const index=hierarchyIndex(entries),ids=new Set(memoryEntries(entries).flatMap(e=>[e.id,...index.descendants(e)])),conflicts=[];
+    for(const id of ids){const entry=index.byId.get(id);if(entry?.type!=='summary'||!entry.imported&&!entry.detachedSources)continue;for(const match of inspectSources(chat,entry.sources).matches)if(!match.message.is_system)conflicts.push({entryId:id,sourceId:match.source.id});}
+    return conflicts;
+}
 export function memoryText(entries,settings,orderedEntries=null) {
     const active=orderedEntries??memoryEntries(entries);
     if(!active.length)return '';
