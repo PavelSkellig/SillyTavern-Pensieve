@@ -1,3 +1,4 @@
+import {openWorkspace} from './ui-navigation.mjs';
 /** Disposable ST only. node tests/memory-workspace.mjs <playwright/index.mjs> [chromium|webkit] [URL] */
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
@@ -16,7 +17,7 @@ try{
  // A fresh ST screen has no selected chat; settings/prompts must not require an archive.
  const noChat=await page.evaluate(()=>!SillyTavern.getContext().chatId);assert.equal(noChat,true,'disposable initial screen must have no chat');
  await page.locator('#pensieve-menu-open').waitFor({state:'attached'});assert.equal(await page.locator('#pensieve-menu-open').count(),1);await page.locator('#pensieve-menu-open').evaluate(n=>n.click());assert.equal(await panel.locator('[data-tab="memory"]').getAttribute('aria-current'),'page');await panel.locator('[data-action="close"]').tap();
- await page.locator('#pensieve-settings-prompts').evaluate(n=>n.click());
+ await openWorkspace(page,'prompts');
  assert.equal(await panel.getByLabel('Промпт эпизода',{exact:true}).count(),1,'global prompts must be accessible without a chat');
  await panel.getByRole('button',{name:'Новый пресет',exact:true}).tap();const ask=page.locator('.pv-editor[open]').last();await ask.getByLabel('Название нового пресета').fill('Workspace QA');await ask.getByRole('button',{name:'Сохранить',exact:true}).tap();
  await panel.getByLabel('Промпт эпизода',{exact:true}).fill('Workspace literal {{char}}');await panel.getByRole('button',{name:'Сохранить промпт',exact:true}).tap();
@@ -36,8 +37,8 @@ try{
   state.chatMetadata.pensieve=archive;Object.assign(state.extensionSettings.pensieve,{enabled:true,inject:true,tokenLimit:6000,theme:'dark'});await core.redisplayChat({startIndex:0,fade:false});state.swipe.refresh();await state.saveChat();state.saveSettingsDebounced();await state.eventSource.emit(state.eventTypes.CHAT_CHANGED,state.chatId);
   return {avatar,chatId:state.chatId,archive:JSON.stringify(archive),prompts:JSON.stringify(state.extensionSettings.pensieve.prompts)};
  });
- await page.locator('#pensieve-settings-memory').evaluate(n=>n.click());await panel.locator('.pv-memory-overview').waitFor();
- assert.equal(await panel.locator('.pv-version').innerText(),'v1.6.0');
+ await openWorkspace(page,'memory');await panel.locator('.pv-memory-overview').waitFor();
+ assert.equal(await panel.locator('.pv-version').innerText(),'v1.6.1');
  const current=panel.locator('[data-memory-section="current"]'),archived=panel.locator('[data-memory-section="archive"]'),card=id=>panel.locator('[data-entry-id="'+id+'"]');
  if(process.argv[5]==='review-home') {
   await panel.locator('[data-tab="home"]').tap();await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('2');await panel.getByLabel('Повторная обработка').selectOption('version');await panel.locator('.pv-preview-details > summary').tap();await panel.locator('.pv-full-preview').waitFor();
@@ -93,7 +94,7 @@ try{
  await page.setViewportSize({width:390,height:844});await panel.locator('.pv-content').evaluate(n=>n.scrollTop=0);await page.screenshot({path:'work/screenshots/workspace-mobile-'+engine+'.png'});await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'work/screenshots/workspace-desktop-'+engine+'.png'});
  const savedArchive=await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().chatMetadata.pensieve));await panel.getByRole('button',{name:'Отключить всю память',exact:true}).tap();await panel.getByRole('button',{name:'Включить память',exact:true}).waitFor();await page.waitForTimeout(1300);await page.reload();
  await page.waitForFunction(avatar=>window.SillyTavern&&document.querySelector('#pensieve-settings-toggle')&&SillyTavern.getContext().characters.some(c=>c.avatar===avatar),fixture.avatar);await page.evaluate(async f=>{const c=SillyTavern.getContext();await c.selectCharacterById(String(c.characters.findIndex(x=>x.avatar===f.avatar)));if(SillyTavern.getContext().chatId!==f.chatId)await SillyTavern.getContext().openCharacterChat(f.chatId);},fixture);
- assert.equal(await panel.evaluate(n=>n.open),false);await page.locator('#pensieve-settings-memory').evaluate(n=>n.click());await panel.getByRole('button',{name:'Включить память',exact:true}).waitFor();assert.equal(await current.locator('[data-entry-id]').count(),0);assert.equal(await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().chatMetadata.pensieve)),savedArchive);
+ assert.equal(await panel.evaluate(n=>n.open),false);await openWorkspace(page,'memory');await panel.getByRole('button',{name:'Включить память',exact:true}).waitFor();assert.equal(await current.locator('[data-entry-id]').count(),0);assert.equal(await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().chatMetadata.pensieve)),savedArchive);
  await panel.getByRole('button',{name:'Включить память',exact:true}).tap();await current.locator('[data-entry-id="arc"]').waitFor();assert.equal(await page.evaluate(()=>SillyTavern.getContext().extensionPrompts.pensieve_active_memory_v1.value),actual);
  assert.equal(await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().extensionSettings.pensieve.prompts)),fixture.prompts);await panel.locator('[data-action="close"]').tap();assert.equal(await page.locator('#pensieve-panel:modal').count(),0);assert.equal(calls,0);assert.deepEqual(errors,[]);
  console.log('PASS '+engine+': global prompts/settings without chat, exact memory view/copy, reversible global disable preserving archive, actual statuses and limits, arc deduplication, mobile cards/navigation/close, no model calls or page errors');

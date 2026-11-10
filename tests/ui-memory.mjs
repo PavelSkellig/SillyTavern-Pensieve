@@ -1,3 +1,4 @@
+import {openWorkspace} from './ui-navigation.mjs';
 /** Disposable ST only. node tests/ui-memory.mjs <playwright/index.mjs> [chromium|webkit] [ST URL] */
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
@@ -34,8 +35,8 @@ try{
  assert.equal(await panel.evaluate(n=>n.open),false,'marking start must not open the dialog');
  await page.locator('[mesid="3"] [data-pensieve-edge="end"]').evaluate(n=>n.click());assert.equal(await panel.evaluate(n=>n.open),false);
  assert.equal(await page.locator('[mesid="1"]').evaluate(n=>n.classList.contains('pensieve-start')),true);
- await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await panel.locator('[name="rangeStart"]').waitFor();assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'2');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
- await panel.locator('[data-action="close"]').tap();await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
+ await openWorkspace(page,'home');await panel.locator('[name="rangeStart"]').waitFor();assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'2');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
+ await panel.locator('[data-action="close"]').tap();await openWorkspace(page,'home');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
  console.log(`PASS ${engine}: boundary selection stays in chat; close/reopen retains range`);
  await panel.locator('[data-tab="archive"]').tap();
  const card=id=>panel.locator(`[data-entry-id="${id}"]`),status=id=>card(id).locator('.pv-entry-title > .pv-memory-status');
@@ -58,9 +59,9 @@ try{
  await status('qa-c').filter({hasText:'Активна'}).waitFor();assert.equal(await panel.locator('.pv-notice').isVisible(),false,'resolved token overflow must not leave a stale warning');
  await card('qa-c').getByRole('button',{name:'Убрать из памяти',exact:true}).tap();await status('qa-c').filter({hasText:'В архиве'}).waitFor();
  await page.screenshot({path:`work/screenshots/memory-sections-${engine}.png`});
- await page.waitForTimeout(1300);await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-summary'));await page.waitForTimeout(500);
+ await page.waitForTimeout(1300);await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-home'));await page.waitForTimeout(500);
  await page.evaluate(async f=>{const c=SillyTavern.getContext();await c.selectCharacterById(String(c.characters.findIndex(x=>x.avatar===f.avatar)));if(SillyTavern.getContext().chatId!==f.chatId)await SillyTavern.getContext().openCharacterChat(f.chatId);},fixture);
- assert.equal(await panel.evaluate(n=>n.open),false);await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await panel.locator('[name="rangeStart"]').waitFor();assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'2');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
+ assert.equal(await panel.evaluate(n=>n.open),false);await openWorkspace(page,'home');await panel.locator('[name="rangeStart"]').waitFor();assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'2');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'4');
  await panel.locator('[data-tab="memory"]').tap();await status('qa-c').waitFor();assert.equal(await status('qa-c').innerText(),'В архиве');
  const preserved=await page.evaluate(()=>{const c=SillyTavern.getContext();return {texts:c.chatMetadata.pensieve.entries.map(e=>[e.id,e.text]),prompts:JSON.stringify(c.extensionSettings.pensieve.prompts)};});assert.deepEqual(preserved,{texts:fixture.texts,prompts:fixture.prompts});
  for(const viewport of [{width:320,height:640},{width:390,height:420},{width:430,height:900}]){await page.setViewportSize(viewport);const b=await panel.evaluate(n=>({scroll:n.scrollWidth,client:n.clientWidth,bottom:n.getBoundingClientRect().bottom,main:n.querySelector('.pv-content').getBoundingClientRect().bottom}));assert.ok(b.scroll<=b.client+1&&b.main<=b.bottom);await panel.locator('.pv-content').evaluate(n=>n.scrollTop=n.scrollHeight);}

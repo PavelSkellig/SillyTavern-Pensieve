@@ -3,7 +3,7 @@ import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
 
-export const UI_VERSION='1.6.0';
+export const UI_VERSION='1.6.1';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -133,6 +133,7 @@ export class UI {
         this.decorateMessages();this.e.host.notify('success','Эпизод сохранён в памяти текущего чата.');
     }
     async mountSettingsDrawer() {
+        if(document.getElementById('pensieve-settings'))return;
         const {toggleDrawer}=await import('/scripts/utils.js');
         const container=document.getElementById('extensions_settings2')??document.getElementById('extensions_settings');
         if(!container)throw Error('Не удалось найти панель настроек расширений SillyTavern.');
@@ -150,13 +151,7 @@ export class UI {
         const content=el('div',{id:'pensieve-settings-content',class:'inline-drawer-content pv-settings-content'});
         const actions=el('div',{class:'pv-settings-actions'});
         const items=[
-            ['pensieve-settings-summary','Создать эпизод','fa-bookmark',()=>this.open('home')],
-            ['pensieve-settings-arc','Создать главу','fa-book-open',()=>{this.archiveTab='summary';this.open('archive');}],
-            ['pensieve-settings-volume','Создать том','fa-book',()=>{this.archiveTab='arc';this.open('archive');}],
-            ['pensieve-open','Архив воспоминаний','fa-book-bookmark',()=>this.open('archive')],
-            ['pensieve-settings-memory','Активная память','fa-eye',()=>this.open('memory')],
-            ['pensieve-settings-prompts','Промпты','fa-feather',()=>this.open('prompts')],
-            ['pensieve-settings-options','Настройки','fa-gear',()=>this.open('settings')],
+            ['pensieve-settings-home','Главная','fa-house',()=>this.open('home')],
         ];
         for(const [id,label,glyph,action]of items) {
             const control=button('',event=>{

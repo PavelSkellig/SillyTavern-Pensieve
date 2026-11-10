@@ -1,3 +1,4 @@
+import {openWorkspace} from './ui-navigation.mjs';
 /** Disposable ST only; real UI, local synthetic data. */
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
@@ -10,10 +11,10 @@ try {
  const context=await browser.newContext(pw.devices['iPhone 13']),page=await context.newPage(),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  if(engine==='webkit')await page.route('**/api/settings/get',async route=>{const response=await route.fetch(),data=await response.json(),s=JSON.parse(data.settings);s.extension_settings.disabledExtensions=[...new Set([...(s.extension_settings.disabledExtensions??[]),'tts'])];data.settings=JSON.stringify(s);await route.fulfill({response,json:data});});
- await page.goto(process.argv[4]??'http://127.0.0.1:18274');await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-prompts'));await page.waitForTimeout(800);
+ await page.goto(process.argv[4]??'http://127.0.0.1:18274');await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-home'));await page.waitForTimeout(800);
  const onboarding=page.locator('dialog[open] .popup-input:visible');if(await onboarding.count()){await onboarding.fill('Reference QA');await page.locator('dialog[open] .popup-button-ok:visible').tap();}
  const panel=page.locator('#pensieve-panel'),dock=page.locator('#pensieve-restore-dock');
- await page.locator('#pensieve-settings-prompts').evaluate(n=>n.click());await panel.getByLabel('Промпт эпизода',{exact:true}).waitFor();
+ await openWorkspace(page,'prompts');await panel.getByLabel('Промпт эпизода',{exact:true}).waitFor();
  const before=await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().extensionSettings.pensieve));
  const draft='НЕСОХРАНЁННЫЙ {{char}}\n# Длинный промпт';
  await panel.getByLabel('Промпт эпизода',{exact:true}).fill(draft);await panel.getByLabel('Промпт эпизода',{exact:true}).evaluate(n=>window.qaPromptNode=n);
@@ -46,7 +47,7 @@ try {
  }
  await page.setViewportSize({width:390,height:844});
  await panel.locator('[data-action="close"]').tap();await page.waitForTimeout(80);assert.equal(await dock.isVisible(),false);assert.equal(await panel.evaluate(n=>n.open),false);await page.locator('#send_textarea').fill('После закрытия');
- await page.locator('#pensieve-settings-prompts').evaluate(n=>n.click());await panel.getByLabel('Промпт эпизода',{exact:true}).waitFor();
+ await openWorkspace(page,'prompts');await panel.getByLabel('Промпт эпизода',{exact:true}).waitFor();
  await panel.locator('[data-action="minimize"]').tap();await dock.getByRole('button').tap();await panel.locator('[data-action="close"]').tap();await page.waitForTimeout(80);assert.equal(await dock.isVisible(),false);
  // A nested progress dialog's X must use the same cancel path as Escape.
  await page.evaluate(async()=>{const {UI}=await import('/scripts/extensions/third-party/SillyTavern-Pensieve/src/ui.js');window.qaCanceled=0;window.qaProgressUI=new UI({settings:()=>({theme:'dark'}),cancel:()=>{window.qaCanceled++;window.qaReject(Error('Canceled'));}});window.qaPending=window.qaProgressUI.generating(()=>new Promise((resolve,reject)=>{window.qaReject=reject;})).catch(()=>{});});

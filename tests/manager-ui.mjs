@@ -1,3 +1,4 @@
+import {openWorkspace} from './ui-navigation.mjs';
 /** Disposable real ST only. node tests/manager-ui.mjs <playwright/index.mjs> [chromium|webkit] [URL] */
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
@@ -42,7 +43,7 @@ try {
  await page.screenshot({path:`work/screenshots/message-icons-${engine}.png`});
  await page.locator('[mesid="1"] [data-pensieve-edge="start"] svg').tap();assert.equal(await panel.evaluate(n=>n.open),false);assert.equal(await page.locator('[mesid="1"] [data-pensieve-edge="start"]').getAttribute('aria-pressed'),'true');
  await page.locator('[mesid="1"] [data-pensieve-edge="end"] svg').tap();assert.equal(await panel.evaluate(n=>n.open),false);
- await page.locator('#pensieve-open').evaluate(n=>n.click());await panel.getByLabel('Поиск воспоминаний').waitFor();
+ await openWorkspace(page,'archive');await panel.getByLabel('Поиск воспоминаний').waitFor();
  await page.waitForFunction(()=>{const tabs=[...document.querySelectorAll('#pensieve-panel .pv-tabs button')];return getComputedStyle(tabs.find(n=>n.getAttribute('aria-current')==='page')).backgroundColor!==getComputedStyle(tabs.find(n=>n.getAttribute('aria-current')==='false')).backgroundColor;});
  const tabColors=await panel.locator('.pv-tabs button').evaluateAll(nodes=>nodes.map(n=>({current:n.getAttribute('aria-current'),background:getComputedStyle(n).backgroundColor})));
  assert.notEqual(tabColors.find(n=>n.current==='page').background,tabColors.find(n=>n.current==='false').background,'current tab must be visually distinct');

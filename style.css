@@ -51,8 +51,8 @@
 }
 #pensieve-settings .pv-settings-actions{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%}
 #pensieve-settings .pv-settings-action{
-    display:flex;align-items:center;gap:10px;width:100%;max-width:100%;min-height:40px;
-    padding:8px 12px;margin:0;background:#263F60;color:#F0E8DC;border:1px solid #B79C7366;
+    display:flex;align-items:center;gap:10px;width:100%;max-width:100%;min-height:36px;
+    padding:6px 10px;margin:0;background:#263E5D;color:#F2EBDD;border:1px solid #526580;
     border-radius:7px;font:inherit;line-height:1.4;text-align:left;cursor:pointer;
     white-space:normal;word-break:normal;overflow-wrap:normal;hyphens:none;
 }
@@ -66,6 +66,7 @@
 #pensieve-panel > .pv-header,#pensieve-panel > .pv-tabs,#pensieve-panel > .pv-notice,#pensieve-panel > .pv-footer{flex:0 0 auto}
 #pensieve-panel > .pv-content{flex:1 1 auto;min-height:0;max-height:none}
 #pensieve-settings .pv-settings-action:hover{border-color:#B79C73;background:#2e4b70}
+#pensieve-settings .pv-settings-action:active{background:#314c6d}
 #pensieve-settings .pv-settings-header:focus-visible,#pensieve-settings .pv-settings-action:focus-visible{outline:2px solid #B79C73;outline-offset:2px}
 
 /* Compact archive presentation; no selectors apply outside Pensieve. */

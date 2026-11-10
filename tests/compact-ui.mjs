@@ -1,3 +1,4 @@
+import {openWorkspace} from './ui-navigation.mjs';
 /** Disposable real ST only. node tests/compact-ui.mjs <playwright/index.mjs> [chromium|webkit] [URL] */
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
@@ -28,10 +29,10 @@ try {
   await core.redisplayChat({startIndex:0,fade:false});state.swipe.refresh();await state.saveChat();state.saveSettingsDebounced();await state.eventSource.emit(state.eventTypes.CHAT_CHANGED,state.chatId);
   return {avatar,chatId:state.chatId,archive:JSON.stringify(archive),prompts:JSON.stringify(state.extensionSettings.pensieve.prompts)};
  });
- const panel=page.locator('#pensieve-panel');await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await panel.locator('[name="rangeStart"]').waitFor();
+ const panel=page.locator('#pensieve-panel');await openWorkspace(page,'home');await panel.locator('[name="rangeStart"]').waitFor();
  await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('42');
  await page.screenshot({path:`work/screenshots/compact-home-${engine}.png`});
- assert.equal(await panel.locator('.pv-version').count(),1,'the loaded UI must show its own version');assert.equal(await panel.locator('.pv-version').innerText(),'v1.6.0');
+ assert.equal(await panel.locator('.pv-version').count(),1,'the loaded UI must show its own version');assert.equal(await panel.locator('.pv-version').innerText(),'v1.6.1');
  const preview=panel.locator('.pv-range-preview'),details=preview.locator('details');assert.ok((await preview.innerText()).includes('Сообщения 1–42 · 42 сообщения'));assert.ok(!(await preview.innerText()).includes('TAIL_1'));
  assert.ok((await preview.innerText()).includes('Уже сохранено в эпизоде №3'));assert.equal(await details.getAttribute('open'),null);assert.equal(await preview.locator('.pv-full-preview > *').count(),0,'full DOM is lazy');assert.ok((await preview.locator('.pv-range-snippet').allTextContents()).every(text=>text.length<120));
  await details.getByText('Показать подробнее',{exact:true}).tap();await preview.locator('.pv-full-preview > *').nth(41).waitFor();assert.ok((await preview.innerText()).includes('TAIL_42'));assert.equal(await preview.locator('img').count(),0,'message text remains literal');
@@ -45,7 +46,7 @@ try {
   await page.setViewportSize({width,height:844});const sizes=await panel.evaluate(n=>{const actions=[...n.querySelectorAll('.pv-home-actions button')].map(x=>x.getBoundingClientRect()),s=n.querySelector('.pv-home-stats').getBoundingClientRect(),p=n.querySelector('.pv-range-preview').getBoundingClientRect();return {actions:actions.map(r=>({y:r.y,h:r.height})),stats:s.height,preview:p.height,scroll:n.scrollWidth,client:n.clientWidth};});
   assert.equal(sizes.actions.length,3);assert.equal(sizes.actions[0].y,sizes.actions[1].y);assert.ok(sizes.actions.every(r=>r.h<=44&&r.h>=36));assert.ok(sizes.stats<=40);assert.ok(sizes.preview<=150,`compact preview at ${width}px: ${sizes.preview}`);assert.ok(sizes.scroll<=sizes.client+1);
  }
- await page.setViewportSize({width:390,height:844});await page.screenshot({path:`work/screenshots/compact-home-${engine}.png`});await panel.locator('[data-action="close"]').tap();await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'42');
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:`work/screenshots/compact-home-${engine}.png`});await panel.locator('[data-action="close"]').tap();await openWorkspace(page,'home');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'42');
  await panel.locator('[data-tab="archive"]').tap();await panel.locator('.pv-record').first().waitFor();assert.equal(await panel.locator('.pv-record').count(),3);assert.equal(await panel.locator('.pv-record.pv-card').count(),0);
  const card=panel.locator('[data-entry-id="last"]');const geometry=await card.evaluate(n=>({h:n.getBoundingClientRect().height,scroll:n.scrollWidth,width:n.clientWidth}));assert.ok(geometry.h<=170,`archive row must be compact: ${geometry.h}`);assert.ok(geometry.scroll<=geometry.width+1);assert.ok(!(await card.innerText()).includes('SAVED_last'));
  await card.locator('summary').tap();await card.getByRole('button',{name:'Открыть',exact:true}).tap();const editor=page.locator('.pv-editor[open]').last();assert.equal(await editor.getByLabel('Текст записи').inputValue(),'SAVED_last');await editor.getByRole('button',{name:'Закрыть',exact:true}).tap();

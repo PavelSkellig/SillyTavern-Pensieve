@@ -1,3 +1,4 @@
+import {openWorkspace} from './ui-navigation.mjs';
 /** Real ST 1.19.0 browser integration. Requires a disposable ST server and Playwright.
  * Usage: node tests/integration.mjs <path-to-playwright/index.mjs> [ST-url]
  * Creates synthetic QA characters/chats. Never point this at a personal ST instance.
@@ -20,7 +21,7 @@ try {
    if(failModel){await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{message:'Synthetic model failure'}})});return;}
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({choices:[{message:{role:'assistant',content:`Проверенное воспоминание ${requests.length} {{char}}`},finish_reason:'stop'}],usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120}})});
  });
- await page.goto(url);await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-open'));
+ await page.goto(url);await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-home'));
  await page.waitForTimeout(1500);
  const onboarding=page.locator('dialog[open] .popup-input:visible');if(await onboarding.count()){await onboarding.fill('Pensieve QA');await page.locator('dialog[open] .popup-button-ok:visible').click();}
  const qaAvatar=await page.evaluate(async()=>{
@@ -41,7 +42,7 @@ try {
    for(const type of ['summary','arc'])live.extensionSettings.pensieve.prompts[type].selected=live.extensionSettings.pensieve.prompts[type].presets[0].id;
    await live.eventSource.emit(live.eventTypes.CHAT_CHANGED,live.chatId);return avatar;
  });
- await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());await page.waitForSelector('#pensieve-panel[open]');
+ await openWorkspace(page,'home');await page.waitForSelector('#pensieve-panel[open]');
  const panel=page.locator('#pensieve-panel');
  await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('50');
  await panel.getByRole('button',{name:'Создать эпизод',exact:true}).last().click();
@@ -77,11 +78,11 @@ try {
  await panel.locator('[data-tab="prompts"]').click();
  const chooser=page.waitForEvent('filechooser');await panel.getByRole('button',{name:'Импорт из .txt'}).click();await (await chooser).setFiles({name:'prompt.txt',mimeType:'text/plain',buffer:Buffer.from('Импортированный промпт {{user}}')});
  await page.waitForTimeout(200);assert.equal(await panel.getByLabel('Промпт эпизода',{exact:true}).inputValue(),'Импортированный промпт {{user}}');await panel.getByRole('button',{name:'Сохранить промпт',exact:true}).click();
- await page.waitForTimeout(1200);await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-open'));
+ await page.waitForTimeout(1200);await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-home'));
  await page.evaluate(async avatar=>{const c=SillyTavern.getContext();const id=c.characters.findIndex(x=>x.avatar===avatar);await c.selectCharacterById(String(id));},qaAvatar);
  assert.equal(await page.evaluate(()=>SillyTavern.getContext().chatMetadata.pensieve.entries.length),3);
  assert.equal(await page.evaluate(()=>SillyTavern.getContext().extensionSettings.pensieve.prompts.summary.presets[0].text),'Импортированный промпт {{user}}');
- await page.locator('#pensieve-open').evaluate(n=>n.click());
+ await openWorkspace(page,'archive');
  for(const [width,height,theme]of [[390,844,'dark'],[390,844,'light'],[1280,900,'light']]){
     await page.setViewportSize({width,height});await panel.locator('[data-tab="settings"]').click();await panel.getByLabel('Тема панели').selectOption(theme);await panel.locator('[data-tab="home"]').click();
     const bounds=await panel.evaluate(n=>({width:n.getBoundingClientRect().width,scroll:n.scrollWidth,client:n.clientWidth}));assert.ok(bounds.width<=width);assert.ok(bounds.scroll<=bounds.client+1);
@@ -92,7 +93,7 @@ try {
  const sourceAction=page.locator('#chat .mes[mesid="180"] [data-pensieve-edge="start"]');assert.equal(await sourceAction.count(),1);await sourceAction.evaluate(n=>n.click());
  assert.equal(await panel.evaluate(n=>n.open),false);
  await page.locator('#chat .mes[mesid="190"] [data-pensieve-edge="end"]').evaluate(n=>n.click());assert.equal(await panel.evaluate(n=>n.open),false);
- await page.locator('#pensieve-settings-summary').evaluate(n=>n.click());assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'181');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'191');
+ await openWorkspace(page,'home');assert.equal(await panel.locator('[name="rangeStart"]').inputValue(),'181');assert.equal(await panel.locator('[name="rangeEnd"]').inputValue(),'191');
  console.log('PASS actual ST: message menu selects both inclusive boundaries');
  const root='/scripts/extensions/third-party/SillyTavern-Pensieve';
  await page.evaluate(async root=>{
@@ -133,7 +134,7 @@ try {
    const d=await e.generateSummary(1,3,{allowOverlap:true});try{await e.saveDraft(d,{title:'Interrupted memory',text:'RECOVERY'});}catch{}
    if(e.archive().pending?.type!=='hide')throw Error('No durable recovery journal');
  });
- await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-open'));await page.waitForTimeout(1000);
+ await page.reload();await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-home'));await page.waitForTimeout(1000);
  await page.evaluate(async({root,groupId})=>{
    const groups=await import('/scripts/group-chats.js');await groups.openGroupById(groupId);
    const core=await import('/script.js'),{Engine}=await import(`${root}/src/engine.js`),{createHost}=await import(`${root}/src/host.js`),chats=await import('/scripts/chats.js');const e=new Engine(createHost(()=>SillyTavern.getContext(),core,chats));

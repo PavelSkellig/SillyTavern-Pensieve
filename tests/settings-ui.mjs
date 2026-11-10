@@ -13,7 +13,7 @@ try {
     const page=await browser.newPage();
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(process.argv[3]??'http://127.0.0.1:18272');
-    await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-open'));
+    await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-home'));
     await page.waitForTimeout(1000);
     const onboarding=page.locator('dialog[open] .popup-input:visible');
     if(await onboarding.count()){await onboarding.fill('Pensieve QA');await page.locator('dialog[open] .popup-button-ok:visible').click();}
@@ -41,17 +41,17 @@ try {
         assert.equal(await header.getAttribute('aria-expanded'),'false');
         await header.click();await content.waitFor({state:'visible'});
         await page.waitForTimeout(300);assert.equal(await header.getAttribute('aria-expanded'),'true');
-        const buttons=content.locator('.pv-settings-action');assert.equal(await buttons.count(),7);
+        const buttons=content.locator('.pv-settings-action');assert.equal(await buttons.count(),1);
         const sizes=await buttons.evaluateAll(nodes=>nodes.map(n=>({width:n.getBoundingClientRect().width,scroll:n.scrollWidth,client:n.clientWidth})));
         assert.ok(sizes.every(s=>Math.abs(s.width-sizes[0].width)<1&&s.scroll<=s.client),`${width}: equal readable buttons`);
         assert.ok(await header.locator('.inline-drawer-icon.up').count());
         await page.screenshot({path:`work/screenshots/settings-drawer-${width}.png`});
         await header.click();await content.waitFor({state:'hidden'});assert.equal(await header.getAttribute('aria-expanded'),'false');
-        console.log(`PASS native settings drawer ${width}px: full width, single line, six buttons, expand/collapse`);
+        console.log(`PASS native settings drawer ${width}px: full width, single line, one Home button, expand/collapse`);
     }
     await page.setViewportSize({width:390,height:844});await header.scrollIntoViewIfNeeded();
     await header.focus();await page.keyboard.press('Enter');await content.waitFor({state:'visible'});
-    for(const [id,tab]of [['pensieve-settings-summary','home'],['pensieve-settings-arc','archive'],['pensieve-open','archive'],['pensieve-settings-memory','memory'],['pensieve-settings-prompts','prompts'],['pensieve-settings-options','settings']]){
+    for(const [id,tab]of [['pensieve-settings-home','home']]){
         const outer=page.locator('#extensions-settings-button .drawer-content');
         if(!await outer.evaluate(n=>n.classList.contains('openDrawer')))await page.locator('#extensions-settings-button .drawer-toggle').click();
         await page.waitForTimeout(300);
