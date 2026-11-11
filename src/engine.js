@@ -332,11 +332,17 @@ export class Engine {
         const blocked=enabled&&(!!this.restoring||!!archive.pending||sourceConflicts.length>0||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
         return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
-    async prepareContext(request) {
-        const s=this.session();
+    async prepareContext(request,type='normal') {
+        let s;try{s=this.session();}catch{return this.refreshMemory();}
         if(!Array.isArray(request)||request===s.chat)throw Error('Для формирования контекста требуется отдельная копия сообщений.');
         const memory=await this.refreshMemory();this.assert(s);
-        if(memory.enabled&&!memory.blocked)stripMemorySources(request,s.chat,memory.sourceIds??new Set());
+        if(memory.enabled&&!memory.blocked){
+            const ids=memory.sourceIds??new Set();
+            // ST derives Continue's writeback prefix from the terminal request item.
+            // Removing a covered terminal source would overwrite it with another message.
+            if(type==='continue'&&ids.has(s.chat.at(-1)?.extra?.[KEY]?.id))throw Error('Дописывание этого сообщения остановлено: оно уже входит в активную память. Для новой реплики используйте обычную отправку в чат. Исходный текст сохранён.');
+            stripMemorySources(request,s.chat,ids);
+        }
         return memory;
     }
     refreshMemory() {

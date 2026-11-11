@@ -23,17 +23,20 @@
 
 ## Task 1: request context
 Files: new src/source-links.js, src/engine.js, index.js; tests/engine.test.js and tests/source-links.test.js.
-Interfaces: memorySources(entries,chat,key,roots) -> {ids:Set,episodes:Set}; stripMemorySources(request,liveChat,ids) mutates only request array; Engine.prepareContext(request) refreshes/injects memory and filters actual request.
+Interfaces: memorySources(entries,chat,key,roots) -> {ids:Set,episodes:Set}; stripMemorySources(request,liveChat,ids) mutates only request array; Engine.prepareContext(request,type) refreshes/injects memory and filters actual request.
 - [x] RED: native reveal makes Engine.memory blocked; after fix false and prepareContext removes only covered request copies, untouched live text/visibility, no saves.
 - [x] Cover episode→chapter→volume, disabled/inactive/blocked memory, moved/regexed messages, changed/duplicate UUIDs and foreign archives.
 - [x] Implement verified local source links; remove only resolvable native overlap from blocking, retaining unresolved/import safety. Wire existing interceptor.
-- [ ] GREEN Node whole suite/check; commit and ledger evidence.
+- [x] GREEN Node whole suite/check; commit and ledger evidence.
 
 ## Task 2: labels and end-to-end release
 Files: src/source-links.js, src/ui.js, style.css, tests/source-links.test.js, tests/visible-history.mjs, version metadata and release docs.
 Interface: messageLabels(entries,chat,key) -> Map(sourceId,label); derived from real typed parent paths and numbering.
 - [x] RED labels: full chain regardless activity, branch/deletion/missing levels, safe provenance; real browser passive labels, native reveal retained.
 - [x] Implement compact label without expand action; reveal must disable old clamp immediately through native attribute selector.
-- [ ] Actual ST Chat/Text payload tests: native episode and volume reveal, fresh continuation, memory disabled, creation from revealed text, chat isolation and reload, no data/visibility changes.
-- [ ] Chromium/WebKit relevant regressions and Node/check; single fresh review; fix material findings RED→GREEN.
-- [ ] Version1.6.4/docs/screenshots; atomic main+tag publication, public manifest and clean-clone verification.
+- [x] Actual ST Chat/Text payload tests: native episode and volume reveal, fresh continuation, memory disabled, creation from revealed text, chat isolation and reload, no data/visibility changes.
+- [x] Chromium/WebKit relevant regressions and Node/check; single fresh review; fix material findings RED→GREEN.
+- [x] Version1.6.4/docs/screenshots prepared.
+- Release gate: atomic main+tag publication, public manifest and clean-clone verification; results recorded in the release session.
+
+Final review fixes: covered terminal native Continue is refused before splicing/HTTP/writeback; normal replies and uncovered Continue remain usable. No-chat quiet generation retains the former empty-memory fallback. Both findings reproduced RED→GREEN in Node and real ST, with Chromium/WebKit.

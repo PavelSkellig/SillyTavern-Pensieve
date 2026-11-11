@@ -15,7 +15,7 @@ export async function boot() {
     globalThis.pensieveGenerationInterceptor=async(request,_contextSize,abort,type)=>{
         if(type==='quiet'&&engine.busy)return;
         try {
-            const memory=await engine.prepareContext(request);
+            const memory=await engine.prepareContext(request,type);
             if(memory.blocked){abort(true);host.notify('error',memory.reason);ui.showNotice(memory.reason);}
         } catch(error) {host.inject('');abort(true);host.notify('error',error.message);}
     };

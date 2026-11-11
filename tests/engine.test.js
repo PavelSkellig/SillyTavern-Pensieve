@@ -320,3 +320,23 @@ for(const change of ['edited','ambiguous','foreign','origin-only'])test(`source 
  if(change==='edited')f.c.chat[1].mes='NEW_EDITED_TEXT';else if(change==='ambiguous')f.c.chat.push(clone(f.c.chat[1]));else if(change==='origin-only')entry.origin={chat:'another-chat',id:entry.id};else{entry.sourceChat='another-chat';entry.detachedSources=true;}
  const request=f.c.chat.filter(m=>!m.is_system).map(m=>({...m})),before=JSON.stringify(request);await f.e.prepareContext(request);assert.equal(JSON.stringify(request),before);
 });
+
+
+test('native continue of a covered terminal source is refused before request or live-source mutation',async()=>{
+ const f=fixture();f.c.chat.splice(0,f.c.chat.length,...f.c.chat.slice(0,3));await saved(f,1,2);f.c.chat[2].is_system=false;
+ const request=f.c.chat.filter(m=>!m.is_system).map(m=>({...m})),before=JSON.stringify([f.c.chat,request,f.c.chatMetadata]),saves=f.saves;
+ await assert.rejects(()=>f.e.prepareContext(request,'continue'),/допис|продолж/i);
+ assert.equal(JSON.stringify([f.c.chat,request,f.c.chatMetadata]),before);assert.equal(f.saves,saves);
+});
+
+test('native continue of a new uncovered reply keeps its prefix while filtering only older sources',async()=>{
+ const f=fixture();await saved(f,1,2);f.c.chat[1].is_system=false;f.c.chat[2].is_system=false;
+ const request=f.c.chat.filter(m=>!m.is_system).map(m=>({...m})),before=JSON.stringify(f.c.chat);await f.e.prepareContext(request,'continue');
+ assert.equal(request.at(-1).mes,'Исходник 7');assert.deepEqual(request.map(m=>m.mes),['Исходник 3','Исходник 4','Исходник 5','Исходник 6','Исходник 7']);assert.equal(JSON.stringify(f.c.chat),before);
+});
+
+for(const enabled of [true,false])test(`quiet generation without a chat is unaffected, extension enabled=${enabled}`,async()=>{
+ const f=fixture();f.c.chatId=null;f.c.chatMetadata={};f.c.chat=[];f.e.settings().enabled=enabled;
+ const request=[{name:'Utility',mes:'QUIET_INPUT',is_user:true,is_system:false,extra:{}}],before=JSON.stringify(request),memory=await f.e.prepareContext(request,'quiet');
+ assert.equal(memory.enabled,false);assert.equal(memory.blocked,false);assert.equal(JSON.stringify(request),before);assert.deepEqual(f.c.chatMetadata,{});assert.equal(f.host.injected,'');assert.equal(f.saves,0);
+});
