@@ -12,10 +12,10 @@ export async function boot() {
     const response=await fetch(new URL('./panel.html',import.meta.url));
     if(!response.ok)throw Error('Не удалось загрузить панель «Омута памяти».');
     await ui.mount(await response.text());
-    globalThis.pensieveGenerationInterceptor=async(_chat,_contextSize,abort,type)=>{
+    globalThis.pensieveGenerationInterceptor=async(request,_contextSize,abort,type)=>{
         if(type==='quiet'&&engine.busy)return;
         try {
-            const memory=await engine.refreshMemory();
+            const memory=await engine.prepareContext(request);
             if(memory.blocked){abort(true);host.notify('error',memory.reason);ui.showNotice(memory.reason);}
         } catch(error) {host.inject('');abort(true);host.notify('error',error.message);}
     };

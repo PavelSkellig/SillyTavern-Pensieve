@@ -3,8 +3,9 @@ import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
 import {GenerationView} from './generation-view.js';
+import {messageLabels} from './source-links.js';
 
-export const UI_VERSION='1.6.3';
+export const UI_VERSION='1.6.4';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -16,7 +17,7 @@ const readFile=accept=>new Promise(resolve=>{const input=el('input',{type:'file'
 async function copy(text){try{await navigator.clipboard.writeText(text);}catch{const t=el('textarea',{},text);document.body.append(t);t.select();const success=document.execCommand('copy');t.remove();if(!success)throw Error('Браузер запретил копирование. Выделите текст и скопируйте вручную.');}}
 
 export class UI {
-    constructor(engine) {this.e=engine;this.tab='memory';this.archiveTab='summary';this.archiveFilter='all';this.archiveSearch='';this.arcOrderManual=false;this.volumeOrderManual=false;this.promptTab='summary';this.start=null;this.end=null;this.rangeEdges={start:null,end:null};this.rangeChatKey=null;this.rangeCache=new Map();this.chosen=[];this.chaptersChosen=[];this.expanded=new Set();this.editor=null;this.timer=null;this.renderId=0;this.windowState='closed';this.resumeDirty=false;}
+    constructor(engine) {this.e=engine;this.tab='memory';this.archiveTab='summary';this.archiveFilter='all';this.archiveSearch='';this.arcOrderManual=false;this.volumeOrderManual=false;this.promptTab='summary';this.start=null;this.end=null;this.rangeEdges={start:null,end:null};this.rangeChatKey=null;this.rangeCache=new Map();this.chosen=[];this.chaptersChosen=[];this.editor=null;this.timer=null;this.renderId=0;this.windowState='closed';this.resumeDirty=false;}
     async mount(html) {
         const template=el('template');template.innerHTML=html;document.body.append(template.content);
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
@@ -68,7 +69,7 @@ export class UI {
         c.eventSource.on(c.eventTypes.CHAT_CHANGED,()=>{
             this.e.host.inject('');if(this.e.busy)this.e.cancel();
             this.generationView?.clear();
-            this.loadRange();this.chosen=[];this.chaptersChosen=[];this.arcOrderManual=false;this.volumeOrderManual=false;this.archiveSearch='';this.expanded.clear();
+            this.loadRange();this.chosen=[];this.chaptersChosen=[];this.arcOrderManual=false;this.volumeOrderManual=false;this.archiveSearch='';
             this.resumeDirty=true;
             this.panel.querySelector('.pv-chat-name').textContent=this.e.host.context().chatId?`Чат: ${this.e.host.context().chatId}`:'Общие настройки · чат не открыт';
             if(this.editor){this.editor.close();this.editor.remove();this.editor=null;}
@@ -642,10 +643,9 @@ export class UI {
     }
     decorateMessages() {
         let archive;try{archive=this.e.archive();}catch{return;}
-        const c=this.e.host.context(),settings=this.e.settings(),processed=new Map();
+        const c=this.e.host.context(),settings=this.e.settings(),processed=messageLabels(archive.entries,c.chat,this.e.key());
         if(this.rangeChatKey===this.e.key())this.resolveRange();
         const valid=this.rangeChatKey===this.e.key()&&Number.isInteger(this.start)&&Number.isInteger(this.end)&&this.start>=0&&this.end>=this.start&&this.end<c.chat.length;
-        for(const e of archive.entries.filter(e=>e.type==='summary'&&!hasDetachedSources(e)))for(const s of e.sources){if(!processed.has(s.id))processed.set(s.id,[]);processed.get(s.id).push(e.title);}
         for(const node of document.querySelectorAll('#chat .mes[mesid]')) {
             const index=Number(node.getAttribute('mesid')),m=c.chat[index];if(!m)continue;
             const menu=node.querySelector('.extraMesButtons');
@@ -667,12 +667,11 @@ export class UI {
             }else create?.remove();
             menu?.querySelectorAll('[data-pensieve-edge]').forEach(b=>b.setAttribute('aria-pressed',String(index===this[b.dataset.pensieveEdge])));
             node.classList.toggle('pensieve-start',settings.enabled&&index===this.start);node.classList.toggle('pensieve-end',settings.enabled&&index===this.end);
-            const id=m.extra?.[KEY]?.id,names=id?processed.get(id):null;let badge=node.querySelector('.pv-message-status');
-            if(names&&settings.enabled){if(!badge){badge=el('div',{class:'pv-message-status'});(node.querySelector('.mes_block')??node).append(badge);}
-                const label=`Омут памяти: ${names.join(', ')} · ${m.is_system?'исключено из контекста':'в контексте'}`;
-                if(badge.dataset.label!==label){badge.dataset.label=label;badge.replaceChildren(document.createTextNode(label));const expand=button('Развернуть / свернуть',()=>{this.expanded.has(id)?this.expanded.delete(id):this.expanded.add(id);this.decorateMessages();});expand.classList.add('pv-expand');badge.append(expand);}
+            const id=m.extra?.[KEY]?.id,label=id?processed.get(id):null;let badge=node.querySelector('.pv-message-status');
+            if(label&&settings.enabled){if(!badge){badge=el('div',{class:'pv-message-status'});(node.querySelector('.mes_block')??node).append(badge);}
+                if(badge.dataset.label!==label){badge.dataset.label=label;badge.replaceChildren(el('span',{class:'pv-source-mark','aria-hidden':'true'},'◈'),el('span',{class:'pv-source-label'},label));}
             }else badge?.remove();
-            node.classList.toggle('pensieve-collapsed',!!(names&&settings.enabled&&settings.collapse&&!this.expanded.has(id)));
+            node.classList.toggle('pensieve-collapsed',!!(label&&settings.enabled&&settings.collapse&&m.is_system));
         }
     }
 }

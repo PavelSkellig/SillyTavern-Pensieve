@@ -3,6 +3,7 @@ import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
 import {importedSourceConflicts,hasDetachedSources} from './core.js';
+import {memorySources,stripMemorySources} from './source-links.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
@@ -325,10 +326,18 @@ export class Engine {
         const s=this.session(),settings=this.settings(),archive=this.archive(s),entries=archive.entries;
         const ordered=narrativeOrder(memoryEntries(entries),entries,s.chat);
         const text=memoryText(entries,settings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
-        const conflicts=memoryConflicts(entries,s.key),sourceConflicts=importedSourceConflicts(entries,s.chat),enabled=settings.enabled&&settings.inject;
+        const sources=memorySources(entries,s.chat,s.key,ordered.entries);
+        const conflicts=memoryConflicts(entries,s.key),sourceConflicts=importedSourceConflicts(entries,s.chat).filter(c=>!sources.episodes.has(c.entryId)),enabled=settings.enabled&&settings.inject;
         const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
         const blocked=enabled&&(!!this.restoring||!!archive.pending||sourceConflicts.length>0||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        return {text,tokens,conflicts,sourceConflicts,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте контекст подключения.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+        return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+    }
+    async prepareContext(request) {
+        const s=this.session();
+        if(!Array.isArray(request)||request===s.chat)throw Error('Для формирования контекста требуется отдельная копия сообщений.');
+        const memory=await this.refreshMemory();this.assert(s);
+        if(memory.enabled&&!memory.blocked)stripMemorySources(request,s.chat,memory.sourceIds??new Set());
+        return memory;
     }
     refreshMemory() {
         const epoch=++this.memoryEpoch;

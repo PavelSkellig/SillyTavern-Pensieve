@@ -277,3 +277,46 @@ test('selected global backup sections require durable confirmation and survive j
 test('late chat switch during global restore preserves newer user settings and never rolls back another chat',async()=>{
  const f=fixture();await saved(f);const file=fullCopy(f);file.prompts.summary.presets[0].text='BACKUP RULE';f.host.saveSettings=async()=>{f.c.chatId='different';f.c.chatMetadata={};f.e.settings().prompts.summary.presets[0].text='NEW USER EDIT';f.e.settings().theme='light';};await assert.rejects(()=>f.e.restoreBackup(file,{restorePrompts:true}),/чат/i);assert.deepEqual(f.c.chatMetadata,{});assert.equal(f.e.prompt('summary').text,'NEW USER EDIT');assert.equal(f.e.settings().theme,'light');
 });
+
+
+test('native reveal stays readable while the request gets memory instead of source history',async()=>{
+ const f=fixture();await saved(f,1,2);f.c.chat[1].is_system=false;f.c.chat[2].is_system=false;
+ const before=JSON.stringify(f.c.chat),archive=JSON.stringify(f.c.chatMetadata),saves=f.saves;
+ assert.equal((await f.e.memory()).blocked,false,'revealing native sources must not block generation');
+ const request=f.c.chat.filter(m=>!m.is_system).map(m=>({...m,mes:'REGEX_'+m.mes}));
+ const memory=await f.e.prepareContext(request);
+ assert.equal(memory.blocked,false);assert.deepEqual(request.map(m=>m.mes),['REGEX_Исходник 3','REGEX_Исходник 4','REGEX_Исходник 5','REGEX_Исходник 6','REGEX_Исходник 7']);assert.ok(f.host.injected.includes('Результат'));
+ assert.equal(JSON.stringify(f.c.chat),before);assert.equal(JSON.stringify(f.c.chatMetadata),archive);assert.equal(f.saves,saves);
+});
+
+test('active volume excludes revealed source episodes through inactive chapters without duplicate memory',async()=>{
+ const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id));await f.e.saveDraft(d,{title:'Том №1',text:'ONLY_VOLUME'});
+ for(const m of f.c.chat)m.is_system=false;f.c.chat.push({name:'Игрок',mes:'NEW_UNCOVERED',is_user:true,is_system:false,extra:{}});
+ const before=JSON.stringify(f.c.chat),request=f.c.chat.map(m=>({...m}));const memory=await f.e.prepareContext(request);
+ assert.equal(memory.blocked,false);assert.deepEqual(request.map(m=>m.mes),['NEW_UNCOVERED']);assert.ok(f.host.injected.includes('ONLY_VOLUME'));assert.ok(!f.host.injected.includes('CHAPTER_A')&&!f.host.injected.includes('Результат'));assert.equal(JSON.stringify(f.c.chat),before);
+});
+
+for(const mode of ['enabled','inject','inactive','overflow'])test(`context leaves raw messages intact when memory is ${mode}`,async()=>{
+ const f=fixture(),entry=await saved(f,1,2);f.c.chat[1].is_system=false;f.c.chat[2].is_system=false;
+ if(mode==='inactive')await f.e.toggle(entry.id,false);else if(mode==='overflow')f.e.settings().tokenLimit=1;else f.e.settings()[mode]=false;
+ const request=f.c.chat.filter(m=>!m.is_system).map(m=>({...m})),before=JSON.stringify(request);await f.e.prepareContext(request);assert.equal(JSON.stringify(request),before);assert.equal(f.host.injected,'');
+});
+
+test('context filtering never operates on the live array or a stale chat session',async()=>{
+ const f=fixture();await saved(f,1,2);f.c.chat[1].is_system=false;const before=JSON.stringify(f.c.chat);
+ await assert.rejects(()=>f.e.prepareContext(f.c.chat),/копи|контекст|сообщ/i);assert.equal(JSON.stringify(f.c.chat),before);
+ const count=f.host.count;f.host.count=async text=>{f.c.chatId='other';return count(text);};const request=f.c.chat.map(m=>({...m})),original=JSON.stringify(request);await assert.rejects(()=>f.e.prepareContext(request),/чат/i);assert.equal(JSON.stringify(request),original);
+});
+
+
+test('moved sources are filtered by verified UUID even when request text and indices are reformatted',async()=>{
+ const f=fixture();await saved(f,1,2);f.c.chat[1].is_system=false;f.c.chat[2].is_system=false;f.c.chat.unshift({name:'Игрок',mes:'INSERTED',is_user:true,is_system:false,extra:{}});
+ const request=f.c.chat.filter(m=>!m.is_system).map((m,i)=>({...m,index:i,mes:'formatted-'+i})),ids=request.filter(m=>m.extra?.pensieve?.id).map(m=>m.extra.pensieve.id);assert.equal(ids.length,2);
+ const before=JSON.stringify(f.c.chat);await f.e.prepareContext(request);assert.equal(request.length,6);assert.ok(request.every(m=>!ids.includes(m.extra?.pensieve?.id)));assert.equal(JSON.stringify(f.c.chat),before);
+});
+
+for(const change of ['edited','ambiguous','foreign','origin-only'])test(`source identity ${change} never silently removes current chat messages`,async()=>{
+ const f=fixture(),entry=await saved(f,1,2);f.c.chat[1].is_system=false;f.c.chat[2].is_system=false;
+ if(change==='edited')f.c.chat[1].mes='NEW_EDITED_TEXT';else if(change==='ambiguous')f.c.chat.push(clone(f.c.chat[1]));else if(change==='origin-only')entry.origin={chat:'another-chat',id:entry.id};else{entry.sourceChat='another-chat';entry.detachedSources=true;}
+ const request=f.c.chat.filter(m=>!m.is_system).map(m=>({...m})),before=JSON.stringify(request);await f.e.prepareContext(request);assert.equal(JSON.stringify(request),before);
+});
