@@ -344,7 +344,7 @@ export class UI {
             else {
                 const selected=this[key].map(id=>archive.entries.find(e=>e.id===id)),ordered=this.e.orderEntries(selected);
                 if(!this[manual])this[key]=ordered.entries.map(e=>e.id);
-                const chosen=el('div',{class:'pv-arc-selection','data-target-level':target});chosen.append(el('strong',{},`Выбрано: ${this[key].length} ${type==='summary'?'глав':'частей'}`),el('small',{},this[manual]?'Ручной порядок. Модель получит записи в показанной последовательности.':'Порядок по исходным сообщениям. Стрелками можно изменить его вручную.'));
+                const chosen=el('div',{class:'pv-arc-selection','data-target-level':target});chosen.append(el('strong',{},`${type==='summary'?'Глав':'Частей'} выбрано: ${this[key].length}`),el('small',{},this[manual]?'Ручной порядок. Модель получит записи в показанной последовательности.':'Порядок по исходным сообщениям. Стрелками можно изменить его вручную.'));
                 this[key].forEach((id,i)=>{
                     const e=archive.entries.find(x=>x.id===id);
                     const up=button('↑',()=>{this[manual]=true;[this[key][i-1],this[key][i]]=[id,this[key][i-1]];this.render();});up.setAttribute('aria-label','Поднять');up.disabled=i===0;
