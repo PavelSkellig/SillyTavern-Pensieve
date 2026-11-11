@@ -1,6 +1,6 @@
 import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
 export const KEY = 'pensieve';
-export const VOLUME_PROMPT='Объедини выбранные главы ролевой истории в единый том долгосрочной памяти. Сохрани последовательность событий, причины и последствия, развитие персонажей и отношений, важные факты, тайны, решения, обещания, предметы и незавершённые сюжетные линии. Покажи актуальное состояние истории на конец тома. Удали повторения, сохраняя значимые сведения. Не копируй главы механически, не придумывай событий и дат, не меняй хронологию. Используй только предоставленные тексты глав.';
+export const VOLUME_PROMPT='Объедини выбранные части ролевой истории в единый том долгосрочной памяти. Сохрани последовательность событий, причины и последствия, развитие персонажей и отношений, важные факты, тайны, решения, обещания, предметы и незавершённые сюжетные линии. Покажи актуальное состояние истории на конец тома. Удали повторения, сохраняя значимые сведения. Не копируй части механически, не придумывай событий и дат, не меняй хронологию. Используй только предоставленные тексты частей.';
 export const PROMPT_KEY = 'pensieve_active_memory_v1';
 export const MAX_ARCHIVE_BYTES = 20 * 1024 * 1024;
 export const WARN_ARCHIVE_BYTES = 5 * 1024 * 1024;
@@ -122,7 +122,7 @@ export function validateArchive(input) {
         };
     });
     const byId=new Map(archive.entries.map(e=>[e.id,e]));
-    for(const e of archive.entries)if(e.type!=='summary'){const links=childrenIds(e);if(new Set(links).size!==links.length||links.some(id=>byId.get(id)?.type!==LEVELS[e.type].sourceType))throw Error('Неверные, отсутствующие или повторяющиеся источники главы или тома.');}
+    for(const e of archive.entries)if(e.type!=='summary'){const links=childrenIds(e);if(new Set(links).size!==links.length||links.some(id=>byId.get(id)?.type!==LEVELS[e.type].sourceType))throw Error('Неверные, отсутствующие или повторяющиеся источники части или тома.');}
     archive.revision=Number.isInteger(input.revision)?input.revision:0;
     if(bytes(archive)>MAX_ARCHIVE_BYTES)throw Error('Архив превышает безопасный предел 20 MiB. Разделите резервную копию.');
     return archive;

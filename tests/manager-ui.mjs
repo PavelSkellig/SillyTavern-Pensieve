@@ -50,7 +50,7 @@ try {
  const ids=()=>panel.locator('.pv-archive-results [data-entry-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.entryId));
  const card=id=>panel.locator(`[data-entry-id="${id}"]`),bar=panel.locator('.pv-arc-selection');
  assert.deepEqual(await ids(),['first','second','third','last']);assert.equal(await bar.count(),0,'no selection toolbar before a selection');
- assert.equal(await card('last').locator('h4').innerText(),'Эпизод №7');assert.equal(await card('last').locator('.pv-record-subtitle').innerText(),'Последняя');assert.ok(!(await card('first').innerText()).includes('FIRST_SECRET'));
+ assert.equal(await card('last').locator('h4').innerText(),'Глава №7');assert.equal(await card('last').locator('.pv-record-subtitle').innerText(),'Последняя');assert.ok(!(await card('first').innerText()).includes('FIRST_SECRET'));
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:`work/screenshots/manager-archive-desktop-${engine}.png`});await page.setViewportSize({width:390,height:844});
  await panel.getByLabel('Поиск воспоминаний').fill('second_secret');await page.waitForTimeout(350);assert.deepEqual(await ids(),['second']);assert.equal(await panel.getByLabel('Поиск воспоминаний').evaluate(n=>n===document.activeElement),true);
  await panel.getByLabel('Поиск воспоминаний').fill('пОсЛеДнЯя');await page.waitForTimeout(350);assert.deepEqual(await ids(),['last']);
@@ -58,10 +58,10 @@ try {
  await card('last').getByRole('checkbox').check();await card('third').getByRole('checkbox').check();
  const chosen=()=>bar.locator('[data-selected-id]').evaluateAll(nodes=>nodes.map(n=>n.dataset.selectedId));assert.deepEqual(await chosen(),['third','last']);
  await bar.locator('[data-selected-id="last"]').getByRole('button',{name:'Поднять'}).tap();assert.deepEqual(await chosen(),['last','third']);
- await card('first').getByRole('checkbox').check();assert.deepEqual(await chosen(),['last','third','first'],'manual order survives additional selection');await bar.getByText('Уже входят в главы:',{exact:false}).waitFor();
+ await card('first').getByRole('checkbox').check();assert.deepEqual(await chosen(),['last','third','first'],'manual order survives additional selection');await bar.getByText('Уже входят в части:',{exact:false}).waitFor();
  await panel.locator('.pv-content').evaluate(n=>n.scrollTop=0);await page.screenshot({path:`work/screenshots/manager-selection-mobile-${engine}.png`});
  await panel.getByLabel('Фильтр архива').selectOption('active');assert.deepEqual(await ids(),['last']);assert.deepEqual(await chosen(),['last','third','first']);await panel.getByLabel('Фильтр архива').selectOption('all');
- await bar.getByRole('button',{name:'Создать главу',exact:true}).tap();const preview=page.locator('.pv-editor[open]').last();await preview.getByLabel('Текст воспоминания').waitFor();
+ await bar.getByRole('button',{name:'Создать часть',exact:true}).tap();const preview=page.locator('.pv-editor[open]').last();await preview.getByLabel('Текст воспоминания').waitFor();
  assert.equal(requests.length,1,'exactly one explicit model request');const input=requests[0].messages[1].content;assert.ok(input.indexOf('LAST_SECRET')<input.indexOf('THIRD_SECRET')&&input.indexOf('THIRD_SECRET')<input.indexOf('FIRST_SECRET'));const expectedPrompt=JSON.parse(fixture.prompts).arc;assert.equal(requests[0].messages[0].content,expectedPrompt.presets.find(p=>p.id===expectedPrompt.selected).text);
  await preview.getByRole('button',{name:'Отмена',exact:true}).tap();await bar.getByRole('button',{name:'По исходным сообщениям'}).tap();assert.deepEqual(await chosen(),['first','third','last']);await bar.getByRole('button',{name:'Снять выбор'}).tap();assert.equal(await bar.count(),0);
  assert.equal(await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().chatMetadata.pensieve)),fixture.archive,'search, selection, order and preview must not rewrite archive');

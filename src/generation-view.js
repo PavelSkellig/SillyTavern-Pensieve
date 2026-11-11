@@ -1,6 +1,6 @@
 import {LEVELS} from './hierarchy.js';
 
-const labels={summary:{making:'эпизод',ready:'Эпизод готов'},arc:{making:'глава',ready:'Глава готова'},volume:{making:'том',ready:'Том готов'}};
+const labels={summary:{making:'глава',ready:'Глава готова'},arc:{making:'часть',ready:'Часть готова'},volume:{making:'том',ready:'Том готов'}};
 const node=(tag,className='',text='')=>{const n=document.createElement(tag);n.className=className;n.textContent=text;return n;};
 const button=(text,action)=>{const n=node('button','',text);n.type='button';n.addEventListener('click',action);return n;};
 
@@ -41,7 +41,7 @@ export class GenerationView {
         job.dialog.dataset.generationState=job.status;job.progress.hidden=!running&&!saving;job.error.hidden=!error;job.error.textContent=job.errorMessage??'';
         job.message.textContent=saving?'Результат получен. Проверяется сохранение на сервере…':'Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.';
         job.retry.hidden=!error;job.retry.disabled=!error;job.retry.textContent=job.phase==='save'?'Повторить сохранение':'Повторить запрос';job.cancel.textContent=error?'Закрыть':'Отменить генерацию';job.cancel.disabled=saving;job.close.disabled=saving;
-        const label=labels[job.type];const title=job.status==='ready'?label.ready:error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Омут памяти — сохраняется эпизод':'Омут памяти — создаётся '+label.making;
+        const label=labels[job.type];const title=job.status==='ready'?label.ready:error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Омут памяти — сохраняется глава':'Омут памяти — создаётся '+label.making;
         this.dock.replaceChildren(button(title,()=>this.restore(job)));this.dock.hidden=!job.windowHidden;
     }
     minimize(job) {

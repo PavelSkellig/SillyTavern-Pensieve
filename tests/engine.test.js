@@ -161,21 +161,21 @@ test('actual memory order follows moved source messages instead of stale saved o
 
 async function chapters(f) {
  const ids=[];for(const [a,b]of [[0,1],[2,3],[4,5],[6,7]])ids.push((await saved(f,a,b)).id);
- const result=[];for(let i=0;i<2;i++){const d=await f.e.generateArc(ids.slice(i*2,i*2+2));result.push(await f.e.saveDraft(d,{title:'Глава '+i,text:i?'CHAPTER_B':'CHAPTER_A'}));}return result;
+ const result=[];for(let i=0;i<2;i++){const d=await f.e.generateArc(ids.slice(i*2,i*2+2));result.push(await f.e.saveDraft(d,{title:'Часть '+i,text:i?'CHAPTER_B':'CHAPTER_A'}));}return result;
 }
 test('legacy prompt upgrade only adds a volume group once without touching existing presets or archive',()=>{
  const f=fixture();delete f.c.extensionSettings[KEY].prompts.volume;const old=JSON.stringify(f.c.extensionSettings[KEY].prompts),metadata=JSON.stringify(f.c.chatMetadata);let saves=0;f.c.saveSettingsDebounced=()=>saves++;
- const settings=f.e.settings();assert.ok(settings.prompts.volume.presets[0].text.includes('глав'));assert.equal(JSON.stringify({summary:settings.prompts.summary,arc:settings.prompts.arc}),old);assert.equal(JSON.stringify(f.c.chatMetadata),metadata);f.e.settings();assert.equal(saves,1);
+ const settings=f.e.settings();assert.ok(settings.prompts.volume.presets[0].text.includes('частей'));assert.equal(JSON.stringify({summary:settings.prompts.summary,arc:settings.prompts.arc}),old);assert.equal(JSON.stringify(f.c.chatMetadata),metadata);f.e.settings();assert.equal(saves,1);
  settings.prompts.volume.presets[0].text='';f.e.settings();assert.equal(settings.prompts.volume.presets[0].text,'');
 });
 test('volume preview uses its literal prompt and selected chapter order without persisting or hiding',async()=>{
  const f=fixture(),[a,b]=await chapters(f);f.e.settings().prompts.volume.presets[0].text='TOM {{char}} literal';const before=JSON.stringify(f.c.chatMetadata),messages=JSON.stringify(f.c.chat),saves=f.saves;
- const draft=await f.e.generateVolume([b.id,a.id]);assert.equal(draft.type,'volume');assert.deepEqual(draft.chapterIds,[b.id,a.id]);assert.equal(f.request.prompt,'TOM {{char}} literal');assert.equal(f.request.source,'Глава 1\nCHAPTER_B\n\nГлава 0\nCHAPTER_A');assert.equal(f.saves,saves);assert.equal(JSON.stringify(f.c.chatMetadata),before);assert.equal(JSON.stringify(f.c.chat),messages);
+ const draft=await f.e.generateVolume([b.id,a.id]);assert.equal(draft.type,'volume');assert.deepEqual(draft.chapterIds,[b.id,a.id]);assert.equal(f.request.prompt,'TOM {{char}} literal');assert.equal(f.request.source,'Часть 1\nCHAPTER_B\n\nЧасть 0\nCHAPTER_A');assert.equal(f.saves,saves);assert.equal(JSON.stringify(f.c.chatMetadata),before);assert.equal(JSON.stringify(f.c.chat),messages);
 });
 test('saved volume preserves all descendants, injects once with later episodes, and never resurrects children on disable',async()=>{
  const f=fixture(),pair=await chapters(f),draft=await f.e.generateVolume(pair.map(e=>e.id)),messages=JSON.stringify(f.c.chat);const v=await f.e.saveDraft(draft,{title:'Том №1',text:'VOLUME_ONLY'});
  assert.equal(f.e.archive().entries.length,7);assert.deepEqual(v.chapterIds,pair.map(e=>e.id));assert.equal(JSON.stringify(f.c.chat),messages);assert.ok(f.e.archive().entries.filter(e=>e.id!==v.id).every(e=>e.active===false));assert.ok(f.host.injected.includes('VOLUME_ONLY')&&!f.host.injected.includes('CHAPTER_A'));
- f.c.chat.push({name:'Игрок',mes:'Продолжение',extra:{},is_system:false});const later=await saved(f,8,8);await f.e.edit(later.id,{title:'Эпизод №5',text:'NEW_EPISODE'});assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[v.id,later.id]);
+ f.c.chat.push({name:'Игрок',mes:'Продолжение',extra:{},is_system:false});const later=await saved(f,8,8);await f.e.edit(later.id,{title:'Глава №5',text:'NEW_EPISODE'});assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[v.id,later.id]);
  await f.e.toggle(v.id,false);assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[later.id]);await f.e.toggle(pair[0].id,true);assert.ok((await f.e.memory()).entries.some(e=>e.id===pair[0].id));await f.e.toggle(v.id,true);await f.e.toggle(v.id,false);assert.equal(f.e.archive().entries.find(e=>e.id===pair[0].id).active,false);
 });
 test('volume source edits and chat switches reject stale or unrelated results',async()=>{
@@ -196,14 +196,14 @@ test('linked children cannot be deleted silently, while deleting a volume retain
 });
 test('deleting an active volume cannot resurrect a regenerated chapter with a latent active flag',async()=>{
  const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(d,{title:'Том №1',text:'VOLUME'});
- const regen=await f.e.generateArc(pair[0].summaryIds,{replaceId:pair[0].id});await f.e.saveDraft(regen,{title:'Глава №1',text:'UPDATED'});assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[v.id]);
+ const regen=await f.e.generateArc(pair[0].summaryIds,{replaceId:pair[0].id});await f.e.saveDraft(regen,{title:'Часть №1',text:'UPDATED'});assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[v.id]);
  await f.e.deleteEntry(v.id);assert.deepEqual((await f.e.memory()).entries,[]);assert.equal(f.e.archive().entries.length,6);
 });
 test('deleting an inactive volume preserves chapters explicitly activated by the user',async()=>{
  const f=fixture(),pair=await chapters(f),d=await f.e.generateVolume(pair.map(e=>e.id)),v=await f.e.saveDraft(d,{title:'Том №1',text:'VOLUME'});await f.e.toggle(v.id,false);await f.e.toggle(pair[0].id,true);await f.e.deleteEntry(v.id);assert.deepEqual((await f.e.memory()).entries.map(e=>e.id),[pair[0].id]);
 });
 test('confirmed child deletion can unlink a source from a three-child parent without losing parent text or other children',async()=>{
- const f=fixture();f.c.chat.push(...Array.from({length:4},(_,i)=>({name:'Test',mes:'Added '+i,is_user:true,is_system:false,extra:{}})));const pair=await chapters(f),x=await saved(f,8,9),y=await saved(f,10,11),draft=await f.e.generateArc([x.id,y.id]),third=await f.e.saveDraft(draft,{title:'Глава №3',text:'THIRD'}),vd=await f.e.generateVolume([...pair.map(e=>e.id),third.id]),v=await f.e.saveDraft(vd,{title:'Том №1',text:'UNCHANGED VOLUME'});
+ const f=fixture();f.c.chat.push(...Array.from({length:4},(_,i)=>({name:'Test',mes:'Added '+i,is_user:true,is_system:false,extra:{}})));const pair=await chapters(f),x=await saved(f,8,9),y=await saved(f,10,11),draft=await f.e.generateArc([x.id,y.id]),third=await f.e.saveDraft(draft,{title:'Часть №3',text:'THIRD'}),vd=await f.e.generateVolume([...pair.map(e=>e.id),third.id]),v=await f.e.saveDraft(vd,{title:'Том №1',text:'UNCHANGED VOLUME'});
  await f.e.deleteEntry(pair[0].id,false,{unlink:true});const parent=f.e.archive().entries.find(e=>e.id===v.id);assert.equal(parent.text,'UNCHANGED VOLUME');assert.equal(parent.needsReview,true);assert.deepEqual(parent.chapterIds,[pair[1].id,third.id]);assert.equal(f.e.archive().entries.filter(e=>e.type==='summary').length,6);
 });
 test('new automatic volume numbers do not reuse an existing visible number after deletion',async()=>{

@@ -18,9 +18,9 @@ try{
  const noChat=await page.evaluate(()=>!SillyTavern.getContext().chatId);assert.equal(noChat,true,'disposable initial screen must have no chat');
  await page.locator('#pensieve-menu-open').waitFor({state:'attached'});assert.equal(await page.locator('#pensieve-menu-open').count(),1);await page.locator('#pensieve-menu-open').evaluate(n=>n.click());assert.equal(await panel.locator('[data-tab="memory"]').getAttribute('aria-current'),'page');await panel.locator('[data-action="close"]').tap();
  await openWorkspace(page,'prompts');
- assert.equal(await panel.getByLabel('Промпт эпизода',{exact:true}).count(),1,'global prompts must be accessible without a chat');
+ assert.equal(await panel.getByLabel('Промпт главы',{exact:true}).count(),1,'global prompts must be accessible without a chat');
  await panel.getByRole('button',{name:'Новый пресет',exact:true}).tap();const ask=page.locator('.pv-editor[open]').last();await ask.getByLabel('Название нового пресета').fill('Workspace QA');await ask.getByRole('button',{name:'Сохранить',exact:true}).tap();
- await panel.getByLabel('Промпт эпизода',{exact:true}).fill('Workspace literal {{char}}');await panel.getByRole('button',{name:'Сохранить промпт',exact:true}).tap();
+ await panel.getByLabel('Промпт главы',{exact:true}).fill('Workspace literal {{char}}');await panel.getByRole('button',{name:'Сохранить промпт',exact:true}).tap();
  await panel.locator('[data-tab="settings"]').tap();await panel.getByLabel('Внедрять активную память',{exact:true}).waitFor();assert.equal(await panel.getByRole('button',{name:'Экспорт архива JSON',exact:true}).count(),0);assert.equal(await panel.getByRole('button',{name:'Экспорт промптов JSON',exact:true}).count(),1);
  assert.equal(await page.evaluate(()=>SillyTavern.getContext().chatMetadata.pensieve??null),null,'global UI must not create a chat archive');
  await panel.locator('[data-action="close"]').tap();
@@ -38,7 +38,7 @@ try{
   return {avatar,chatId:state.chatId,archive:JSON.stringify(archive),prompts:JSON.stringify(state.extensionSettings.pensieve.prompts)};
  });
  await openWorkspace(page,'memory');await panel.locator('.pv-memory-overview').waitFor();
- assert.equal(await panel.locator('.pv-version').innerText(),'v1.6.4');
+ assert.equal(await panel.locator('.pv-version').innerText(),'v1.6.5');
  const current=panel.locator('[data-memory-section="current"]'),archived=panel.locator('[data-memory-section="archive"]'),card=id=>panel.locator('[data-entry-id="'+id+'"]');
  if(process.argv[5]==='review-home') {
   await panel.locator('[data-tab="home"]').tap();await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('2');await panel.getByLabel('Повторная обработка').selectOption('version');await panel.locator('.pv-preview-details > summary').tap();await panel.locator('.pv-full-preview').waitFor();
@@ -48,8 +48,8 @@ try{
   console.log('PASS review: same-chat overlap choice and full preview');await context.close();process.exitCode=0;
  } else if(process.argv[5]==='review-membership') {
   await page.evaluate(()=>{const entries=SillyTavern.getContext().chatMetadata.pensieve.entries,arc=entries.find(e=>e.id==='arc');arc.active=false;entries.push({...structuredClone(arc),id:'arc2',title:'Арка №2 — Второй родитель'});});await panel.getByRole('button',{name:'Обновить',exact:true}).tap();await card('a').waitFor();
-  assert.equal(await card('a').getByRole('button',{name:'Входит в главу №1',exact:true}).count(),1,'inactive parent must retain its membership link');assert.equal(await card('a').getByRole('button',{name:'Входит в главу №2',exact:true}).count(),1);
-  for(const [name,title]of [['Входит в главу №1','Арка №1 — От знакомства до решения'],['Входит в главу №2','Арка №2 — Второй родитель']]){await card('a').getByRole('button',{name,exact:true}).tap();const d=page.locator('.pv-editor[open]').last();assert.equal(await d.getByLabel('Название записи').inputValue(),title);await d.getByRole('button',{name:'Закрыть окно',exact:true}).tap();}
+  assert.equal(await card('a').getByRole('button',{name:'Входит в часть №1',exact:true}).count(),1,'inactive parent must retain its membership link');assert.equal(await card('a').getByRole('button',{name:'Входит в часть №2',exact:true}).count(),1);
+  for(const [name,title]of [['Входит в часть №1','Арка №1 — От знакомства до решения'],['Входит в часть №2','Арка №2 — Второй родитель']]){await card('a').getByRole('button',{name,exact:true}).tap();const d=page.locator('.pv-editor[open]').last();assert.equal(await d.getByLabel('Название записи').inputValue(),title);await d.getByRole('button',{name:'Закрыть окно',exact:true}).tap();}
   console.log('PASS review: inactive and multiple parent links');await context.close();process.exitCode=0;
  } else if(process.argv[5]==='review-loading') {
   await panel.locator('[data-action="minimize"]').tap();let release,hit;const gate=new Promise(r=>release=r),intercepted=new Promise(r=>hit=r);await page.route('**/api/chats/get',async route=>{if(route.request().postDataJSON().file_name?.startsWith('Reference delayed')){hit();await gate;}await route.continue();});
@@ -67,11 +67,11 @@ try{
  // The reference uses compact archive disclosures while keeping every action.
  await panel.locator('[data-tab="archive"]').tap();await card('d').waitFor();assert.equal(await card('d').getByRole('button',{name:'Открыть',exact:true}).isVisible(),false);
  await card('d').locator('.pv-entry-more > summary').tap();await card('d').getByRole('button',{name:'Открыть',exact:true}).locator('i').tap();dialog=page.locator('.pv-editor[open]').last();assert.equal(await dialog.getByLabel('Текст записи').inputValue(),'DELTA');await dialog.getByRole('button',{name:'Закрыть окно',exact:true}).tap();
- await card('a').getByRole('button',{name:'Входит в главу №1',exact:true}).tap();dialog=page.locator('.pv-editor[open]').last();assert.equal(await dialog.getByLabel('Текст записи').inputValue(),'ARC_AB');await dialog.getByRole('button',{name:'Закрыть окно',exact:true}).tap();
+ await card('a').getByRole('button',{name:'Входит в часть №1',exact:true}).tap();dialog=page.locator('.pv-editor[open]').last();assert.equal(await dialog.getByLabel('Текст записи').inputValue(),'ARC_AB');await dialog.getByRole('button',{name:'Закрыть окно',exact:true}).tap();
  assert.equal(await page.evaluate(()=>JSON.stringify(SillyTavern.getContext().chatMetadata.pensieve)),fixture.archive);
  for(const tab of ['home','archive','memory','prompts','settings']) {
   await panel.locator('[data-tab="'+tab+'"]').tap();await page.waitForTimeout(180);await panel.locator('.pv-content').evaluate(n=>n.scrollTop=0);
-  if(tab==='settings')assert.deepEqual(await panel.locator('.pv-setting-group > legend').allTextContents(),['Память','Создание эпизодов','Архив','Интерфейс']);
+  if(tab==='settings')assert.deepEqual(await panel.locator('.pv-setting-group > legend').allTextContents(),['Память','Создание глав','Архив','Интерфейс']);
   await page.screenshot({path:'work/screenshots/reference-'+tab+'-mobile-'+engine+'.png',scale:'css'});
   assert.ok(await panel.evaluate(n=>n.scrollWidth<=n.clientWidth+1&&n.querySelector('.pv-content').scrollWidth<=n.querySelector('.pv-content').clientWidth+1),tab+' must fit iPhone');
  }
@@ -79,7 +79,7 @@ try{
  // Minimized records must be refreshed after switching chats, with no old text injected.
  await panel.locator('[data-action="minimize"]').tap();await page.waitForTimeout(50);assert.equal(await page.evaluate(()=>SillyTavern.getContext().extensionPrompts.pensieve_active_memory_v1.value),actual);
  await page.evaluate(async()=>{const c=SillyTavern.getContext();await c.openCharacterChat('Reference empty '+Date.now());});await page.waitForTimeout(250);assert.equal(await page.evaluate(()=>SillyTavern.getContext().extensionPrompts.pensieve_active_memory_v1.value),'');
- await page.locator('#pensieve-restore-dock button').tap();await panel.getByText('Сначала создайте эпизод.',{exact:true}).waitFor();assert.equal(await panel.locator('[data-entry-id]').count(),0);
+ await page.locator('#pensieve-restore-dock button').tap();await panel.getByText('Сначала создайте главу.',{exact:true}).waitFor();assert.equal(await panel.locator('[data-entry-id]').count(),0);
  await panel.locator('[data-action="minimize"]').tap();await page.evaluate(async f=>{await SillyTavern.getContext().openCharacterChat(f.chatId);},fixture);await page.waitForTimeout(250);
  await page.screenshot({path:'work/screenshots/reference-minimized-mobile-'+engine+'.png'});await page.locator('#pensieve-restore-dock button').tap();await current.locator('[data-entry-id="arc"]').waitFor();assert.equal(await page.evaluate(()=>SillyTavern.getContext().extensionPrompts.pensieve_active_memory_v1.value),actual);
  await panel.getByRole('button',{name:'Отключить всю память',exact:true}).tap();await page.waitForFunction(()=>SillyTavern.getContext().extensionPrompts.pensieve_active_memory_v1.value==='');await panel.getByRole('button',{name:'Включить память',exact:true}).waitFor();assert.equal(await current.locator('[data-entry-id]').count(),0);assert.equal(await panel.locator('.pv-memory-active').count(),0);

@@ -1,7 +1,7 @@
 /** Additive book levels. Legacy record IDs, titles and prompt keys stay intact. */
 export const LEVELS={
-    summary:{name:'Эпизод',plural:'Эпизоды',genitive:'эпизода',many:'эпизодов',icon:'fa-bookmark',legacy:'Сводка'},
-    arc:{name:'Глава',plural:'Главы',genitive:'главы',many:'глав',icon:'fa-book-open',legacy:'Арка',sourceType:'summary'},
+    summary:{name:'Глава',plural:'Главы',genitive:'главы',many:'глав',icon:'fa-bookmark',legacy:['Эпизод','Сводка']},
+    arc:{name:'Часть',plural:'Части',genitive:'части',many:'частей',icon:'fa-book-open',legacy:['Глава','Арка'],sourceType:'summary'},
     volume:{name:'Том',plural:'Тома',genitive:'тома',many:'томов',icon:'fa-book',sourceType:'arc'},
 };
 export const childrenIds=entry=>entry?.type==='volume'?entry.chapterIds??[]:entry?.type==='arc'?entry.summaryIds??[]:[];
@@ -17,16 +17,17 @@ export function hierarchyIndex(entries) {
     const ancestors=entry=>{const found=[],seen=new Set([entry.id]),queue=[...(parents.get(entry.id)??[])];for(let i=0;i<queue.length;i++){const parent=queue[i];if(seen.has(parent.id))continue;seen.add(parent.id);found.push(parent);queue.push(...(parents.get(parent.id)??[]));}return found;};
     return {byId,parents,descendants,ancestors};
 }
+const titlePrefix=level=>`(?:${[level.name,...(level.legacy??[])].join('|')})`;
 export function entryNumber(entry,allEntries) {
-    const level=LEVELS[entry.type],prefix=level.legacy?`(?:${level.name}|${level.legacy})`:level.name;
+    const level=LEVELS[entry.type],prefix=titlePrefix(level);
     return entry.title.match(new RegExp(`^${prefix}\\s*№\\s*(\\d+)`,'i'))?.[1]??String(allEntries.filter(e=>e.type===entry.type).findIndex(e=>e.id===entry.id)+1);
 }
 export function displayTitle(entry,allEntries) {
-    const level=LEVELS[entry.type],prefix=level.legacy?`(?:${level.name}|${level.legacy})`:level.name;
+    const level=LEVELS[entry.type],prefix=titlePrefix(level);
     const matched=entry.title.match(new RegExp(`^${prefix}\\s*№\\s*(\\d+)([\\s\\S]*)$`,'i'));
     return matched?`${level.name} №${matched[1]}${matched[2]}`:`${level.name} №${entryNumber(entry,allEntries)} — ${entry.title}`;
 }
-export const relationLabel=(parent,allEntries)=>`Входит в ${parent.type==='volume'?'том':'главу'} №${entryNumber(parent,allEntries)}`;
+export const relationLabel=(parent,allEntries)=>`Входит в ${parent.type==='volume'?'том':'часть'} №${entryNumber(parent,allEntries)}`;
 export function nextNumber(type,allEntries) {
     let highest=0;for(const entry of allEntries.filter(e=>e.type===type)){const number=Number(entryNumber(entry,allEntries));if(Number.isSafeInteger(number)&&number>highest)highest=number;}
     return highest+1;

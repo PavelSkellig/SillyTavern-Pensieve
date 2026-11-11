@@ -1,0 +1,341 @@
+{
+  "format": "pensieve-backup",
+  "version": 1,
+  "exportedAt": "2026-11-11T00:00:00.000Z",
+  "source": {
+    "key": "legacy-local",
+    "name": "Старый чат",
+    "hadPendingOperation": false
+  },
+  "archive": {
+    "version": 1,
+    "owner": "legacy-local",
+    "revision": 0,
+    "entries": [
+      {
+        "id": "old-s0",
+        "type": "summary",
+        "title": "Эпизод №9 — Старое название",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-s0",
+        "order": 0,
+        "active": false,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [
+          {
+            "id": "legacy-msg-0",
+            "hash": "ccd137b6e2366262a34868a8a5d23198",
+            "index": 0,
+            "previousHidden": true
+          },
+          {
+            "id": "legacy-msg-1",
+            "hash": "5e03e3abb14e6f51ad12e200af998507",
+            "index": 1,
+            "previousHidden": true
+          }
+        ],
+        "summaryIds": [],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-s0",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-s0"
+        },
+        "sourceChat": "legacy-local"
+      },
+      {
+        "id": "old-s1",
+        "type": "summary",
+        "title": "Сводка №7 — На мосту",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-s1",
+        "order": 2,
+        "active": false,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [
+          {
+            "id": "legacy-msg-2",
+            "hash": "d44176ecc7730b28f6304e9c98a779a4",
+            "index": 2,
+            "previousHidden": true
+          },
+          {
+            "id": "legacy-msg-3",
+            "hash": "172eddbbcceba36b497f8932c3b8d22d",
+            "index": 3,
+            "previousHidden": true
+          }
+        ],
+        "summaryIds": [],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-s1",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-s1"
+        },
+        "sourceChat": "legacy-local"
+      },
+      {
+        "id": "old-s2",
+        "type": "summary",
+        "title": "Дневник: Эпизод на мосту",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-s2",
+        "order": 4,
+        "active": false,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [
+          {
+            "id": "legacy-msg-4",
+            "hash": "0a623f92a8ad7c5ee2dbadc8b8e6e9c0",
+            "index": 4,
+            "previousHidden": true
+          },
+          {
+            "id": "legacy-msg-5",
+            "hash": "602bad2b22ce145d15ea626cba2c263b",
+            "index": 5,
+            "previousHidden": true
+          }
+        ],
+        "summaryIds": [],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-s2",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-s2"
+        },
+        "sourceChat": "legacy-local"
+      },
+      {
+        "id": "old-s3",
+        "type": "summary",
+        "title": "Эпизод №2",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-s3",
+        "order": 6,
+        "active": false,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [
+          {
+            "id": "legacy-msg-6",
+            "hash": "cc128a6825ede194ebcdeaa4e04488e4",
+            "index": 6,
+            "previousHidden": true
+          },
+          {
+            "id": "legacy-msg-7",
+            "hash": "7418128ba4beb3872af0fe9e972b5241",
+            "index": 7,
+            "previousHidden": true
+          }
+        ],
+        "summaryIds": [],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-s3",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-s3"
+        },
+        "sourceChat": "legacy-local"
+      },
+      {
+        "id": "old-a0",
+        "type": "arc",
+        "title": "Глава №3 — Пользовательское",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-a0",
+        "order": 0,
+        "active": false,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [],
+        "summaryIds": [
+          "old-s0",
+          "old-s1"
+        ],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-a0",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-a0"
+        },
+        "sourceChat": "legacy-local"
+      },
+      {
+        "id": "old-a1",
+        "type": "arc",
+        "title": "Арка №8 — Сохранить",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-a1",
+        "order": 4,
+        "active": false,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [],
+        "summaryIds": [
+          "old-s2",
+          "old-s3"
+        ],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-a1",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-a1"
+        },
+        "sourceChat": "legacy-local"
+      },
+      {
+        "id": "old-v0",
+        "type": "volume",
+        "title": "Том №1 — Архив",
+        "text": "НЕ МЕНЯТЬ: Эпизод и Глава внутри пользовательского текста old-v0",
+        "order": 0,
+        "active": true,
+        "version": 2,
+        "createdAt": "2026-11-10",
+        "updatedAt": "2026-11-11",
+        "sources": [],
+        "summaryIds": [],
+        "chapterIds": [
+          "old-a0",
+          "old-a1"
+        ],
+        "history": [
+          {
+            "version": 1,
+            "title": "Прежний заголовок old-v0",
+            "text": "История. Эпизод → Глава.",
+            "updatedAt": "2026-11-10"
+          }
+        ],
+        "needsReview": false,
+        "restored": false,
+        "imported": false,
+        "preset": "Сохранённый пользовательский",
+        "origin": {
+          "chat": "legacy-local",
+          "id": "old-v0"
+        },
+        "sourceChat": "legacy-local"
+      }
+    ],
+    "pending": null
+  },
+  "prompts": {
+    "summary": {
+      "selected": "default",
+      "presets": [
+        {
+          "id": "default",
+          "name": "Основной",
+          "text": "ПОЛЬЗОВАТЕЛЬСКИЙ summary: Эпизод, Глава, {{char}}, не заменять.",
+          "history": []
+        }
+      ]
+    },
+    "arc": {
+      "selected": "default",
+      "presets": [
+        {
+          "id": "default",
+          "name": "Основной",
+          "text": "ПОЛЬЗОВАТЕЛЬСКИЙ arc: Эпизод, Глава, {{char}}, не заменять.",
+          "history": []
+        }
+      ]
+    },
+    "volume": {
+      "selected": "default",
+      "presets": [
+        {
+          "id": "default",
+          "name": "Основной",
+          "text": "ПОЛЬЗОВАТЕЛЬСКИЙ volume: Эпизод, Глава, {{char}}, не заменять.",
+          "history": []
+        }
+      ]
+    }
+  },
+  "settings": {
+    "enabled": true,
+    "inject": true,
+    "exclude": true,
+    "collapse": false,
+    "pastNoteEnabled": true,
+    "previewEpisodes": false,
+    "tokenLimit": 6000,
+    "depth": 4,
+    "position": 1,
+    "theme": "dark",
+    "pastNote": "Ниже приведены сведения о ранее произошедших событиях. Учитывай их для последовательности истории и поведения персонажей, но не пересказывай прошлое без необходимости и не разыгрывай завершённые события повторно.",
+    "ui": {
+      "drawerExpanded": true
+    }
+  }
+}

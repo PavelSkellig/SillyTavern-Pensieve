@@ -73,10 +73,10 @@ export class Engine {
         return this.run(async()=>{
             const s=this.session();if(this.archive(s).pending)throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(this.archive(s).entries,range);
-            if(replaceId&&hasDetachedSources(this.archive(s).entries.find(e=>e.id===replaceId)))throw Error('Источники этой копии относятся к другому чату. Создайте отдельный новый эпизод.');
+            if(replaceId&&hasDetachedSources(this.archive(s).entries.find(e=>e.id===replaceId)))throw Error('Источники этой копии относятся к другому чату. Создайте отдельную новую главу.');
             if(overlaps.length&&!allowOverlap)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
             if(replaceId&&!overlaps.some(e=>e.id===replaceId))throw Error('Запись для замены не связана с диапазоном.');
-            return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Эпизод №${nextNumber('summary',this.archive(s).entries)}`,order:start});
+            return this.generateDraft({session:s,type:'summary',range,replaceId,title:`Глава №${nextNumber('summary',this.archive(s).entries)}`,order:start});
         });
     }
     generateArc(ids,options={}) {return this.generateCollection('arc',ids,options);}
@@ -124,7 +124,7 @@ export class Engine {
                     source.ref.extra[KEY].id??=this.host.uuid();source.id=source.ref.extra[KEY].id;
                 }
                 // Replacement keeps the same provenance; extending an existing range is a separate version.
-                if(old&&(old.sources.length!==draft.range.length||old.sources.some((x,i)=>x.id!==draft.range[i].id)))throw Error('Для замены выберите ровно исходные сообщения этого эпизода. Для другого диапазона сохраните отдельную версию.');
+                if(old&&(old.sources.length!==draft.range.length||old.sources.some((x,i)=>x.id!==draft.range[i].id)))throw Error('Для замены выберите ровно исходные сообщения этой главы. Для другого диапазона сохраните отдельную версию.');
             } else {
                 if(childrenIds(draft).some((id,i)=>archive.entries.find(e=>e.id===id)?.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Повторите генерацию.');
             }
@@ -224,7 +224,7 @@ export class Engine {
     async restore(id) {
         return this.run(async()=>{
             const s=this.session(),archive=clone(this.archive(s)),entry=archive.entries.find(e=>e.id===id);
-            if(!entry||entry.type!=='summary')throw Error('Выберите эпизод для восстановления исходников.');
+            if(!entry||entry.type!=='summary')throw Error('Выберите главу для восстановления исходников.');
             if(hasDetachedSources(entry))throw Error('Исходники восстановленной копии принадлежат другому чату или отсутствуют. Сообщения текущего чата не изменены.');
             if(archive.pending)throw Error('Сначала восстановите незавершённую операцию.');
             archive.pending={type:'restore',entryId:id};await this.persist(s,archive);
@@ -254,9 +254,9 @@ export class Engine {
         return this.change((a,s)=>{
             const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');
             const index=hierarchyIndex(a.entries),parents=index.parents.get(id)??[];
-            if(parents.length&&(!unlink||parents.some(p=>childrenIds(p).length<3)))throw Error('Запись входит в связанную главу или том. У каждого родителя после удаления должны остаться минимум две исходные записи; требуется явное подтверждение отвязывания.');
+            if(parents.length&&(!unlink||parents.some(p=>childrenIds(p).length<3)))throw Error('Запись входит в связанную часть или том. У каждого родителя после удаления должны остаться минимум две исходные записи; требуется явное подтверждение отвязывания.');
             if(e.type==='summary') {
-                if(s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.includes(id)))throw Error('Сначала восстановите исходники эпизода. Для изменённых источников верните исходный ответ и повторите восстановление.');
+                if(s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.includes(id)))throw Error('Сначала восстановите исходники главы. Для изменённых источников верните исходный ответ и повторите восстановление.');
             }
             if(e.type!=='summary'&&(e.active||index.ancestors(e).some(p=>p.active))){const covered=index.descendants(e);for(const source of a.entries)if(covered.has(source.id))source.active=false;}
             for(const parent of index.ancestors(e))parent.needsReview=true;

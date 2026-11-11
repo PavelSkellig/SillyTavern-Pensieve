@@ -32,12 +32,12 @@ test('volume validator rejects wrong, missing, duplicate or cyclic chapter links
  for(const ids of [['a1','missing'],['a1','s1'],['a1','a1'],['a1','v1']]){const a=core.emptyArchive('x');a.entries=fixture();a.entries[6].chapterIds=ids;assert.throws(()=>core.validateArchive(a));}
 });
 test('changing an episode marks chapters and volumes transitively without rewriting either parent',()=>{
- const entries=fixture(),texts=entries.map(e=>e.text);core.reviseEntry(entries,'s1',{title:'Новый эпизод',text:'Новый текст'});
+ const entries=fixture(),texts=entries.map(e=>e.text);core.reviseEntry(entries,'s1',{title:'Новая глава',text:'Новый текст'});
  assert.equal(entries[4].needsReview,true);assert.equal(entries[6].needsReview,true);assert.equal(entries[5].needsReview,false);assert.deepEqual(entries.slice(1).map(e=>e.text),texts.slice(1));
 });
 test('legacy titles are projected as episodes and chapters without rewriting their saved titles',()=>{
  const entries=fixture();entries[0].title='Сводка №7 — {{char}}';entries[4].title='Арка №9 — Тайна';const before=JSON.stringify(entries);
- assert.equal(entryDisplayTitle(entries[0],entries),'Эпизод №7 — {{char}}');assert.equal(entryDisplayTitle(entries[4],entries),'Глава №9 — Тайна');assert.equal(entryDisplayTitle(entries[6],entries),'Том №1 — v1');assert.equal(JSON.stringify(entries),before);
+ assert.equal(entryDisplayTitle(entries[0],entries),'Глава №7 — {{char}}');assert.equal(entryDisplayTitle(entries[4],entries),'Часть №9 — Тайна');assert.equal(entryDisplayTitle(entries[6],entries),'Том №1 — v1');assert.equal(JSON.stringify(entries),before);
 });
 test('effective state and hierarchy membership stay independent at every level',()=>{
  const entries=fixture(),volume=entries[6],memory={enabled:true,blocked:false,text:'EXACT',entries:[volume,entries[7]]},state=memoryViewState(entries,memory,['a2']);
@@ -47,5 +47,5 @@ test('effective state and hierarchy membership stay independent at every level',
 });
 test('legacy records can be found by the new visible episode/chapter name without rewriting titles',()=>{
  const entries=fixture();entries[0].title='Сводка №7 — Тайна';entries[4].title='Арка №9';const state=memoryViewState(entries,{enabled:true,blocked:false,entries:[],text:''});
- assert.deepEqual(filterArchive(entries,state,'all','Эпизод №7').map(e=>e.id),['s1']);assert.deepEqual(filterArchive(entries,state,'all','Глава №9').map(e=>e.id),['a1']);assert.equal(entries[0].title,'Сводка №7 — Тайна');
+ assert.deepEqual(filterArchive(entries,state,'all','Глава №7').map(e=>e.id),['s1']);assert.deepEqual(filterArchive(entries,state,'all','Часть №9').map(e=>e.id),['a1']);assert.equal(entries[0].title,'Сводка №7 — Тайна');
 });

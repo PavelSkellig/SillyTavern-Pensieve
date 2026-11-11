@@ -1,0 +1,158 @@
+[
+  {
+    "name": "Герой",
+    "mes": "STORED_SOURCE_0",
+    "is_user": false,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-0"
+      }
+    },
+    "swipe_id": 0,
+    "swipes": [
+      "STORED_SOURCE_0"
+    ]
+  },
+  {
+    "name": "Игрок",
+    "mes": "STORED_SOURCE_1",
+    "is_user": true,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-1"
+      }
+    }
+  },
+  {
+    "name": "Герой",
+    "mes": "STORED_SOURCE_2",
+    "is_user": false,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-2"
+      }
+    },
+    "swipe_id": 0,
+    "swipes": [
+      "STORED_SOURCE_2"
+    ]
+  },
+  {
+    "name": "Игрок",
+    "mes": "STORED_SOURCE_3",
+    "is_user": true,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-3"
+      }
+    }
+  },
+  {
+    "name": "Герой",
+    "mes": "STORED_SOURCE_4",
+    "is_user": false,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-4"
+      }
+    },
+    "swipe_id": 0,
+    "swipes": [
+      "STORED_SOURCE_4"
+    ]
+  },
+  {
+    "name": "Игрок",
+    "mes": "STORED_SOURCE_5",
+    "is_user": true,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-5"
+      }
+    }
+  },
+  {
+    "name": "Герой",
+    "mes": "STORED_SOURCE_6",
+    "is_user": false,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-6"
+      }
+    },
+    "swipe_id": 0,
+    "swipes": [
+      "STORED_SOURCE_6"
+    ]
+  },
+  {
+    "name": "Игрок",
+    "mes": "STORED_SOURCE_7",
+    "is_user": true,
+    "is_system": true,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-7"
+      }
+    }
+  },
+  {
+    "name": "Герой",
+    "mes": "STORED_SOURCE_8",
+    "is_user": false,
+    "is_system": false,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-8"
+      }
+    },
+    "swipe_id": 0,
+    "swipes": [
+      "STORED_SOURCE_8"
+    ]
+  },
+  {
+    "name": "Игрок",
+    "mes": "STORED_SOURCE_9",
+    "is_user": true,
+    "is_system": false,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-9"
+      }
+    }
+  },
+  {
+    "name": "Герой",
+    "mes": "STORED_SOURCE_10",
+    "is_user": false,
+    "is_system": false,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-10"
+      }
+    },
+    "swipe_id": 0,
+    "swipes": [
+      "STORED_SOURCE_10"
+    ]
+  },
+  {
+    "name": "Игрок",
+    "mes": "STORED_SOURCE_11",
+    "is_user": true,
+    "is_system": false,
+    "extra": {
+      "pensieve": {
+        "id": "legacy-msg-11"
+      }
+    }
+  }
+]
