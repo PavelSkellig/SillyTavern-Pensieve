@@ -4,11 +4,11 @@ function fixture(settings=defaults()){
  const chat=[{name:'User',mes:'SOURCE',is_user:true,is_system:false,extra:{pensieve:{id:'source-id'}}},{name:'User',mes:'NEW',is_user:true,is_system:false,extra:{}}],c={chatId:'one',characterId:0,characters:[{avatar:'test.png'}],chat,chatMetadata:{},extensionSettings:settings?{pensieve:settings}:{},saveSettingsDebounced(){f.settingsWrites++;}};
  const f={c,settingsWrites:0,injected:null};f.host={context:()=>c,count:async text=>Math.ceil(text.length/4),limits:()=>({context:32000,output:2000}),inject:text=>f.injected=text};f.e=new Engine(f.host);c.chatMetadata.pensieve={version:1,owner:f.e.key(),revision:1,pending:null,entries:[{id:'saved',type:'summary',title:'Глава №1',text:'ACTIVE_BODY',active:true,version:1,order:0,createdAt:'2026',updatedAt:'2026',history:[],summaryIds:[],sources:[{id:'source-id',hash:fingerprint(chat[0]),index:0,previousHidden:false}]}]};return f;
 }
-test('new installation uses native after-main placement, neutral template and system role',()=>{
- const f=fixture(null),s=f.e.settings();const calls=[];f.c.setExtensionPrompt=(...args)=>calls.push(args);const h=createHost(()=>f.c,{},{});h.inject('BODY');assert.equal(calls[0][2],0);assert.equal(calls[0][5],0);assert.ok(calls[0][1].includes('BODY'));assert.ok(calls[0][1].includes('Предыдущие события'));assert.equal(s.depth,4);
+test('new installation uses native after-main placement, plain Echo template and system role',()=>{
+ const f=fixture(null),s=f.e.settings();const calls=[];f.c.setExtensionPrompt=(...args)=>calls.push(args);const h=createHost(()=>f.c,{},{});h.inject('BODY');assert.equal(calls[0][2],0);assert.equal(calls[0][5],0);assert.equal(calls[0][1],'BODY');assert.equal(s.template,'{{memory_echo}}');assert.equal(s.depth,4);
 });
 for(const position of [0,1,2])test(`legacy placement ${position} and global memory state are retained`,()=>{
- const s=defaults();Object.assign(s,{position,depth:7,inject:false});delete s.role;delete s.template;const f=fixture(s);f.e.settings();assert.equal(s.position,position);assert.equal(s.depth,7);assert.equal(s.inject,false);assert.equal(s.role,0);assert.equal(s.template,'');assert.equal(f.settingsWrites,1);f.e.settings();assert.equal(f.settingsWrites,1);
+ const s=defaults();Object.assign(s,{position,depth:7,inject:false});delete s.role;delete s.template;const f=fixture(s);f.e.settings();assert.equal(s.position,position);assert.equal(s.depth,7);assert.equal(s.inject,false);assert.equal(s.role,0);assert.equal(s.template,'{{memory_echo}}');assert.equal(f.settingsWrites,1);f.e.settings();assert.equal(f.settingsWrites,1);
 });
 test('native injection receives selected position/depth/role and template Echo is internal and single-use',()=>{
  const f=fixture(),calls=[];f.c.setExtensionPrompt=(...args)=>calls.push(args);const h=createHost(()=>f.c,{},{});
@@ -26,3 +26,5 @@ test('legacy backups get compatible defaults and new placement fields roundtrip 
  const old=defaults();delete old.role;delete old.template;old.position=1;const result=validateBackupSettings(old);assert.equal(result.role,0);assert.equal(result.template,'');assert.equal(result.position,1);
  const next={...old,position:-1,role:1,template:'[{{memory_echo}}]'};const {prompts,...expected}=next;assert.deepEqual(validateBackupSettings(next),expected);for(const patch of [{position:99},{role:3},{template:5}])assert.throws(()=>validateBackupSettings({...next,...patch}));
 });
+
+test('blank template is filled once while custom templates and later deliberate clears are retained',()=>{for(const template of ['', 'CUSTOM {{memory_echo}}']){const s=defaults();s.template=template;const f=fixture(s);f.e.settings();assert.equal(s.template,template||'{{memory_echo}}');s.template='';f.e.settings();assert.equal(s.template,'');assert.equal(f.settingsWrites,1);}});

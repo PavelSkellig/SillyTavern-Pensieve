@@ -1,5 +1,5 @@
 export const MEMORY_ECHO=/{{\s*memory_echo\s*}}/gi;
-export const DEFAULT_INJECTION_TEMPLATE='[Предыдущие события:\n{{memory_echo}}\n]';
+export const DEFAULT_INJECTION_TEMPLATE='{{memory_echo}}';
 
 /** Template Echo is internal to the automatic block, not a user macro invocation. */
 export function automaticMemory(text,settings) {

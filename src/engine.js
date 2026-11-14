@@ -1,3 +1,5 @@
+import {normalisePromptPresets,mergePromptGroups} from './prompt-presets.js';
+import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
 import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
@@ -13,6 +15,8 @@ export class Engine {
         let changed=false;if(settings.prompts&&!Object.hasOwn(settings.prompts,'volume')){settings.prompts.volume=defaults().prompts.volume;changed=true;}
         if(!Object.hasOwn(settings,'previewEpisodes')){settings.previewEpisodes=true;changed=true;}
         for(const [key,value]of Object.entries({position:1,depth:4,role:0,template:''}))if(!Object.hasOwn(settings,key)){settings[key]=value;changed=true;}
+        if(!settings.templateDefaultsVersion){if(typeof settings.template==='string'&&!settings.template.trim())settings.template=DEFAULT_INJECTION_TEMPLATE;settings.templateDefaultsVersion=1;changed=true;}
+        if(normalisePromptPresets(settings))changed=true;
         if(changed)c.saveSettingsDebounced?.();
         return settings;
     }
@@ -34,7 +38,7 @@ export class Engine {
     }
     cancel() {this.cancelled=true;this.host.cancel?.();}
     prompt(type) {
-        const p=this.settings().prompts[type],preset=p.presets.find(x=>x.id===p.selected);
+        const settings=this.settings(),p=settings.prompts[type],preset=p.presets.find(x=>x.id===settings.prompts.summary.selected);
         if(!preset?.text.trim())throw Error(`Сначала сохраните свой промпт ${LEVELS[type].genitive} в разделе «Промпты».`);
         return preset;
     }
@@ -291,7 +295,8 @@ export class Engine {
             if(current.pending)throw Error('Сначала завершите незавершённую операцию памяти.');
             if(mode==='replace'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.length))throw Error('Перед заменой архива восстановите собственные исключения сообщений. Объединение доступно без этого.');
             if(options.restorePrompts&&!file.prompts||options.restoreSettings&&!file.settings)throw Error('В этой прежней копии нет выбранных промптов или настроек.');
-            const candidateSettings={...clone(settings),...(options.restoreSettings?validateBackupSettings(file.settings):{}),prompts:options.restorePrompts?validatePromptGroups(file.prompts):clone(settings.prompts)};
+            const restoredPrompts=options.restorePrompts?mergePromptGroups(settings.prompts,validatePromptGroups(file.prompts)):clone(settings.prompts);
+            const candidateSettings={...clone(settings),...(options.restoreSettings?validateBackupSettings(file.settings):{}),prompts:restoredPrompts};
             const stamp=JSON.stringify([s.metadata[KEY]??null,settings]),previousArchive=s.metadata[KEY],hadArchive=Object.hasOwn(s.metadata,KEY);
             const plan=planRestore(current,file,{targetKey:s.key,mode,activate:options.activate===true,uuid:()=>this.host.uuid(),chat:s.chat});
             if(options.activate){
@@ -302,7 +307,7 @@ export class Engine {
             }
             this.assert(s);if(stamp!==JSON.stringify([s.metadata[KEY]??null,settings]))throw Error('Память или настройки изменились во время проверки. Повторите восстановление.');
             // A durable marker blocks all injection until both complete-archive writes verify.
-            const globals={...(options.restoreSettings?{settings:clone(file.settings)}:{}),...(options.restorePrompts?{prompts:clone(file.prompts)}:{})},previousGlobals={...(options.restoreSettings?{settings:validateBackupSettings(settings)}:{}),...(options.restorePrompts?{prompts:clone(settings.prompts)}:{})};
+            const globals={...(options.restoreSettings?{settings:clone(file.settings)}:{}),...(options.restorePrompts?{prompts:clone(restoredPrompts)}:{})},previousGlobals={...(options.restoreSettings?{settings:validateBackupSettings(settings)}:{}),...(options.restorePrompts?{prompts:clone(settings.prompts)}:{})};
             plan.archive.pending={type:'backup',globals,previousGlobals};
             let globalsApplied=false;this.restoring=true;
             try{

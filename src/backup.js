@@ -7,7 +7,7 @@ export function validatePromptGroups(value) {
     if(!ownObject(value))throw Error('В копии отсутствуют пользовательские промпты.');
     const result={};
     for(const type of ['summary','arc','volume']){
-        const group=value[type];if(!ownObject(group)||!Array.isArray(group.presets)||!group.presets.length||group.presets.length>100)throw Error('Неверный список пресетов в резервной копии.');
+        const group=value[type];if(!ownObject(group)||!Array.isArray(group.presets)||!group.presets.length||group.presets.length>500)throw Error('Неверный список пресетов в резервной копии.');
         const ids=new Set(),presets=group.presets.map(p=>{
             if(!ownObject(p)||typeof p.id!=='string'||!p.id||p.id.length>200||ids.has(p.id)||typeof p.name!=='string'||!p.name.trim()||p.name.length>2000||!Array.isArray(p.history)||p.history.length>10000)throw Error('Повреждён пресет промпта в резервной копии.');
             ids.add(p.id);return {id:p.id,name:p.name,text:requireString(p.text,'текст промпта'),history:p.history.map(h=>requireString(h,'версия промпта'))};
