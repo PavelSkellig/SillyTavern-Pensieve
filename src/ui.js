@@ -6,7 +6,7 @@ import {createBackup,parseBackup,planRestore} from './backup.js';
 import {GenerationView} from './generation-view.js';
 import {messageLabels} from './source-links.js';
 
-export const UI_VERSION='1.7.0';
+export const UI_VERSION='1.8.0';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};

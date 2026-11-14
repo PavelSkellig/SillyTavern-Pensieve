@@ -32,7 +32,7 @@ try {
  const panel=page.locator('#pensieve-panel');await openWorkspace(page,'home');await panel.locator('[name="rangeStart"]').waitFor();
  await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('42');
  await page.screenshot({path:`work/screenshots/compact-home-${engine}.png`});
- assert.equal(await panel.locator('.pv-version').count(),1,'the loaded UI must show its own version');assert.equal(await panel.locator('.pv-version').innerText(),'v1.7.0');
+ assert.equal(await panel.locator('.pv-version').count(),1,'the loaded UI must show its own version');assert.equal(await panel.locator('.pv-version').innerText(),'v1.8.0');
  const preview=panel.locator('.pv-range-preview'),details=preview.locator('details');assert.ok((await preview.innerText()).includes('Сообщения 1–42 · 42 сообщения'));assert.ok(!(await preview.innerText()).includes('TAIL_1'));
  assert.ok((await preview.innerText()).includes('Уже сохранено в главе №3'));assert.equal(await details.getAttribute('open'),null);assert.equal(await preview.locator('.pv-full-preview > *').count(),0,'full DOM is lazy');assert.ok((await preview.locator('.pv-range-snippet').allTextContents()).every(text=>text.length<120));
  await details.getByText('Показать подробнее',{exact:true}).tap();await preview.locator('.pv-full-preview > *').nth(41).waitFor();assert.ok((await preview.innerText()).includes('TAIL_42'));assert.equal(await preview.locator('img').count(),0,'message text remains literal');

@@ -38,7 +38,7 @@ try{
   return {avatar,chatId:state.chatId,archive:JSON.stringify(archive),prompts:JSON.stringify(state.extensionSettings.pensieve.prompts)};
  });
  await openWorkspace(page,'memory');await panel.locator('.pv-memory-overview').waitFor();
- assert.equal(await panel.locator('.pv-version').innerText(),'v1.7.0');
+ assert.equal(await panel.locator('.pv-version').innerText(),'v1.8.0');
  const current=panel.locator('[data-memory-section="current"]'),archived=panel.locator('[data-memory-section="archive"]'),card=id=>panel.locator('[data-entry-id="'+id+'"]');
  if(process.argv[5]==='review-home') {
   await panel.locator('[data-tab="home"]').tap();await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('2');await panel.getByLabel('Повторная обработка').selectOption('version');await panel.locator('.pv-preview-details > summary').tap();await panel.locator('.pv-full-preview').waitFor();

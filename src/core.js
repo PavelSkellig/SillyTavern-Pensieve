@@ -1,3 +1,4 @@
+import {BUILTIN_PROMPTS} from './builtin-prompts.js';
 import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
 export const KEY = 'pensieve';
@@ -12,7 +13,7 @@ export const defaults = () => ({
     tokenLimit: 6000, position: 0, depth: 4, role:0, template:DEFAULT_INJECTION_TEMPLATE, theme: 'dark',
     pastNoteEnabled: true,
     pastNote: 'Ниже приведены сведения о ранее произошедших событиях. Учитывай их для последовательности истории и поведения персонажей, но не пересказывай прошлое без необходимости и не разыгрывай завершённые события повторно.',
-    prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:'',history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:'',history:[]}] },volume:{selected:'default',presets:[{id:'default',name:'Основной',text:VOLUME_PROMPT,history:[]}]} },
+    prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:BUILTIN_PROMPTS.summary,history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:BUILTIN_PROMPTS.arc,history:[]}] },volume:{selected:'default',presets:[{id:'default',name:'Основной',text:BUILTIN_PROMPTS.volume,history:[]}]} },
 });
 export const emptyArchive = owner => ({version:1,owner,revision:0,entries:[],pending:null});
 // v1.5 imports have unknown provenance; matching UUIDs do not establish ownership.
