@@ -1,6 +1,7 @@
 import {Engine} from './src/engine.js';
 import {createHost,verifyHost} from './src/host.js';
 import {UI} from './src/ui.js';
+import {installMemoryEcho} from './src/memory-echo.js';
 
 export async function boot() {
     const context=()=>globalThis.SillyTavern.getContext();
@@ -12,13 +13,13 @@ export async function boot() {
     const response=await fetch(new URL('./panel.html',import.meta.url));
     if(!response.ok)throw Error('Не удалось загрузить панель «Омута памяти».');
     await ui.mount(await response.text());
+    const echo=await installMemoryEcho(engine,{onError:error=>ui.showNotice(error.message)});
     globalThis.pensieveGenerationInterceptor=async(request,_contextSize,abort,type)=>{
         if(type==='quiet'&&engine.busy)return;
         try {
-            const memory=await engine.prepareContext(request,type);
-            if(memory.blocked){abort(true);host.notify('error',memory.reason);ui.showNotice(memory.reason);}
-        } catch(error) {host.inject('');abort(true);host.notify('error',error.message);}
+            await echo.prepare(request,type);
+        } catch(error) {echo.fail(error);abort(true);}
     };
-    return {engine,ui};
+    return {engine,ui,echo};
 }
 if(globalThis.SillyTavern)boot().catch(error=>{console.error('[Pensieve]',error);globalThis.toastr?.error?.(error.message,'Омут памяти');});

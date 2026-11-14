@@ -1,7 +1,8 @@
 import {PROMPT_KEY} from './core.js';
+import {automaticMemory} from './placement.js';
 
 export function createHost(context,core,chats,fetcher=globalThis.fetch) {
-    let ownGeneration=false;
+    let ownGeneration=false,deliveryFormatter=null;
     return {
         context,uuid:()=>context().uuidv4(),count:text=>context().getTokenCountAsync(text),
         configuration() {
@@ -64,9 +65,11 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch) {
             return {metadata:file[0].chat_metadata,messages:file.slice(1)};
         },
         hide:(start,end,unhide)=>chats.hideChatMessageRange(start,end,unhide),
+        setDeliveryFormatter(formatter){deliveryFormatter=formatter;},
         inject(text) {
             const c=context(),settings=c.extensionSettings.pensieve;
-            c.setExtensionPrompt(PROMPT_KEY,text,Number(settings?.position??1),Number(settings?.depth??4),false,0);
+            const custom=deliveryFormatter?.(text),position=Number(settings?.position??1);
+            c.setExtensionPrompt(PROMPT_KEY,typeof custom==='string'?custom:automaticMemory(text,settings),position,Number(settings?.depth??4),false,position===1?Number(settings?.role??0):0);
         },
         refresh() {context().swipe?.refresh();},
         notify(type,message) {globalThis.toastr?.[type]?.(message,'Омут памяти');},

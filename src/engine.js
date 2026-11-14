@@ -11,7 +11,9 @@ export class Engine {
         const c=this.host.context();
         c.extensionSettings[KEY]??=defaults();const settings=c.extensionSettings[KEY];
         let changed=false;if(settings.prompts&&!Object.hasOwn(settings.prompts,'volume')){settings.prompts.volume=defaults().prompts.volume;changed=true;}
-        if(!Object.hasOwn(settings,'previewEpisodes')){settings.previewEpisodes=true;changed=true;}if(changed)c.saveSettingsDebounced?.();
+        if(!Object.hasOwn(settings,'previewEpisodes')){settings.previewEpisodes=true;changed=true;}
+        for(const [key,value]of Object.entries({position:1,depth:4,role:0,template:''}))if(!Object.hasOwn(settings,key)){settings[key]=value;changed=true;}
+        if(changed)c.saveSettingsDebounced?.();
         return settings;
     }
     key(c=this.host.context()) {return JSON.stringify([c.groupId??null,c.characters[c.characterId]?.avatar??null,c.chatId]);}
@@ -330,13 +332,13 @@ export class Engine {
         const conflicts=memoryConflicts(entries,s.key),sourceConflicts=importedSourceConflicts(entries,s.chat).filter(c=>!sources.episodes.has(c.entryId)),enabled=settings.enabled&&settings.inject;
         const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
         const blocked=enabled&&(!!this.restoring||!!archive.pending||sourceConflicts.length>0||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+        return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,placement:Number(settings.position),limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
-    async prepareContext(request,type='normal') {
+    async prepareContext(request,type='normal',{deferDelivery=false}={}) {
         let s;try{s=this.session();}catch{return this.refreshMemory();}
         if(!Array.isArray(request)||request===s.chat)throw Error('Для формирования контекста требуется отдельная копия сообщений.');
         const memory=await this.refreshMemory();this.assert(s);
-        if(memory.enabled&&!memory.blocked){
+        if(memory.enabled&&!memory.blocked&&memory.placement!==-1&&!deferDelivery){
             const ids=memory.sourceIds??new Set();
             // ST derives Continue's writeback prefix from the terminal request item.
             // Removing a covered terminal source would overwrite it with another message.
@@ -353,9 +355,15 @@ export class Engine {
             const stamp=()=>JSON.stringify([this.archive(s).revision,this.settings()]);
             let memory,before;
             do {before=stamp();memory=await this.memory();this.assert(s);if(epoch!==this.memoryEpoch)return this.memoryTask;}while(before!==stamp());
-            this.host.inject(memory.enabled&&!memory.blocked?memory.text:'');return memory;
+            this.memorySnapshot={memory,session:s,stamp:stamp()};
+            this.host.inject(memory.enabled&&!memory.blocked&&memory.placement!==-1?memory.text:'');return memory;
         })();
         return this.memoryTask;
+    }
+    peekMemory() {
+        const cached=this.memorySnapshot;if(!cached)return null;
+        try{this.assert(cached.session);if(cached.stamp!==JSON.stringify([this.archive(cached.session).revision,this.settings()]))return null;}catch{return null;}
+        return cached.memory;
     }
     orderEntries(entries=null) {const s=this.session(),all=this.archive(s).entries;return narrativeOrder(entries??chronological(all),all,s.chat);}
     entries() {return this.orderEntries().entries;}

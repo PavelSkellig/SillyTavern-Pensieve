@@ -19,8 +19,10 @@ const booleanSettings=['enabled','inject','exclude','collapse','pastNoteEnabled'
 export function validateBackupSettings(value) {
     if(!ownObject(value))throw Error('В копии отсутствуют настройки памяти.');const result={};
     for(const key of booleanSettings){if(typeof value[key]!=='boolean')throw Error('Повреждена настройка памяти: '+key);result[key]=value[key];}
-    if(!Number.isSafeInteger(value.tokenLimit)||value.tokenLimit<1||!Number.isInteger(value.depth)||value.depth<0||value.depth>10000||![0,1,2].includes(value.position)||!['dark','light'].includes(value.theme))throw Error('Неверные лимит, позиция или тема памяти.');
+    if(!Number.isSafeInteger(value.tokenLimit)||value.tokenLimit<1||!Number.isInteger(value.depth)||value.depth<0||value.depth>10000||![-1,0,1,2].includes(value.position)||!['dark','light'].includes(value.theme))throw Error('Неверные лимит, позиция или тема памяти.');
     Object.assign(result,{tokenLimit:value.tokenLimit,depth:value.depth,position:value.position,theme:value.theme,pastNote:requireString(value.pastNote,'пометка о прошлом')});
+    if(value.role!==undefined&&![0,1,2].includes(value.role))throw Error('Некорректная роль памяти.');
+    Object.assign(result,{role:value.role??0,template:value.template===undefined?'':requireString(value.template,'шаблон инжекта')});
     if(value.ui!==undefined){if(!ownObject(value.ui)||typeof value.ui.drawerExpanded!=='boolean')throw Error('Повреждены настройки интерфейса.');result.ui={drawerExpanded:value.ui.drawerExpanded};}
     return result;
 }

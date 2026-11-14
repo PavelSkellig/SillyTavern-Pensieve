@@ -5,7 +5,7 @@ import {createBackup,parseBackup,planRestore} from './backup.js';
 import {GenerationView} from './generation-view.js';
 import {messageLabels} from './source-links.js';
 
-export const UI_VERSION='1.6.5';
+export const UI_VERSION='1.7.0';
 
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',fn);return b;};
@@ -440,12 +440,12 @@ export class UI {
     }
     async memoryView(archive,stamp) {
         const memory=this.lastMemory,state=this.viewState;if(stamp!==this.renderId)return;
-        const connected=memory.enabled&&!memory.blocked,actualTokens=connected&&state.actualText&&Number.isFinite(memory.tokens)?memory.tokens:0,limitValue=this.e.settings().tokenLimit;
+        const macroOnly=Number(this.e.settings().position)===-1,connected=memory.enabled&&!memory.blocked,actualTokens=connected&&state.actualText&&Number.isFinite(memory.tokens)?memory.tokens:0,limitValue=this.e.settings().tokenLimit;
         const overview=el('section',{class:'pv-memory-overview','aria-label':'Состояние памяти'}),head=el('div',{class:'pv-memory-overview-head'}),amount=el('div');
         amount.append(el('p',{class:'pv-memory-caption'},'Память для следующего ответа'),el('p',{class:'pv-memory-amount'},`≈${actualTokens.toLocaleString('ru-RU')} / ${limitValue.toLocaleString('ru-RU')} токенов`));
-        head.append(amount,el('span',{class:'pv-connection '+(connected?'pv-connected':'')},!memory.enabled?'Отключена':memory.blocked?'Требует внимания':'Подключена'));
+        head.append(amount,el('span',{class:'pv-connection '+(connected?'pv-connected':'')},!memory.enabled?'Отключена':memory.blocked?'Требует внимания':macroOnly?'Только через макрос':'Подключена'));
         const meter=el('div',{class:'pv-memory-meter','aria-hidden':'true'}),fill=el('span');fill.style.width=`${Math.min(100,Math.max(0,actualTokens/limitValue*100))}%`;meter.append(fill);
-        overview.append(head,meter,el('p',{class:'pv-memory-caption'},connected?(state.actualText?'Подготовлена к отправке при следующем запросе персонажу.':'Память включена. Активных записей для отправки пока нет.'):`Выбрано ≈${Number.isFinite(memory.tokens)?memory.tokens.toLocaleString('ru-RU'):'—'} токенов. Сейчас блок не отправляется.`));this.content.append(overview);
+        overview.append(head,meter,el('p',{class:'pv-memory-caption'},connected?(macroOnly?'Автоматическая вставка отключена. Блок передаётся только при наличии {{memory_echo}} в фактически используемом промпте.':state.actualText?'Подготовлена к отправке при следующем запросе персонажу.':'Память включена. Активных записей для отправки пока нет.'):`Выбрано ≈${Number.isFinite(memory.tokens)?memory.tokens.toLocaleString('ru-RU'):'—'} токенов. Сейчас блок не отправляется.`));this.content.append(overview);
         if(!memory.enabled)this.content.append(el('p',{class:'pv-warning'},'Внедрение памяти глобально отключено. Сохранённые записи сейчас не передаются модели.'));
         if(memory.blocked)this.content.append(el('p',{class:'pv-warning'},memory.reason));
         for(const warning of memory.orderWarnings??[])this.content.append(el('p',{class:'pv-warning'},warning));
@@ -454,9 +454,9 @@ export class UI {
         const previews=el('div',{class:'pv-memory-previews'}),details=el('details'),summary=el('summary',{},'Итоговый блок памяти целиком');details.append(summary,el('pre',{},state.actualText||'Память сейчас не внедряется.'));previews.append(details);
         if(state.candidateText&&state.candidateText!==state.actualText){const draft=el('details');draft.append(el('summary',{},'Выбранные записи — предварительный просмотр'),el('p',{class:'pv-muted'},'Этот текст сохранён и выбран, но сейчас не внедряется в запрос.'),el('pre',{},state.candidateText),button('Скопировать выбранные записи',()=>this.act(()=>copy(state.candidateText))));previews.append(draft);}
         if(!archive.entries.length)this.content.append(el('p',{class:'pv-empty'},'Сначала создайте главу.'));
-        for(const [name,title,entries]of [['current','Сейчас в памяти модели',state.current],['archive','Только в архиве',this.e.orderEntries(chronological(state.archived)).entries]]){
+        for(const [name,title,entries]of [['current',macroOnly?'Доступно через Memory Echo':'Сейчас в памяти модели',state.current],['archive','Только в архиве',this.e.orderEntries(chronological(state.archived)).entries]]){
             const section=el('section',{'data-memory-section':name,class:'pv-memory-section'}),titleRow=el('div',{class:'pv-memory-section-heading'});titleRow.append(el('i',{class:'fa-solid '+(name==='current'?'fa-star':'fa-box-archive'),'aria-hidden':'true'}),el('h3',{},title),el('span',{class:'pv-record-count','aria-label':'Записей: '+entries.length},String(entries.length)));
-            section.append(titleRow,el('p',{class:'pv-memory-description'},name==='current'?'Эти записи подключены к памяти и подготовлены для следующего запроса персонажу.':'Эти записи не отправляются в модель, но доступны для просмотра и добавления в память.'));
+            section.append(titleRow,el('p',{class:'pv-memory-description'},name==='current'?(macroOnly?'Эти записи доступны макросу. Без макроса в промпте они не отправляются.':'Эти записи подключены к памяти и подготовлены для следующего запроса персонажу.'):'Эти записи не отправляются в модель, но доступны для просмотра и добавления в память.'));
             if(!entries.length)section.append(el('p',{class:'pv-muted'},name==='current'?'В сформированном блоке нет записей.':'Все записи включены в память.'));
             for(const e of entries)section.append(this.entryCard(e,archive,true));this.content.append(section);
         }
@@ -484,18 +484,30 @@ export class UI {
         dialog.onclose=()=>{text.value=area.value;dialog.remove();};dialog.showModal();area.focus();
     }
     saveSettings() {this.e.host.context().saveSettingsDebounced();this.schedule();}
+    memoryPlacementView(section,settings) {
+        section.append(el('p',{class:'pv-muted'},'Куда вставлять память'));
+        const options=el('div',{class:'pv-placement-options'}),details=el('div',{class:'pv-placement-details'});
+        for(const [value,title]of [[-1,'Никуда (только макрос)'],[2,'Перед основным промптом'],[0,'После основного промпта'],[1,'Внутри чата']]){
+            const radio=el('input',{type:'radio',name:'pensieve-memory-position',value,'aria-label':title});radio.checked=Number(settings.position)===value;
+            radio.onchange=()=>{if(!radio.checked)return;settings.position=value;details.hidden=value!==1;this.saveSettings();};
+            const label=el('label');label.append(radio,el('span',{},title));options.append(label);
+        }
+        const depth=el('input',{type:'number',min:0,max:10000,value:settings.depth,'aria-label':'Глубина памяти'});depth.onchange=()=>{settings.depth=Math.max(0,Math.min(10000,Number(depth.value)||0));depth.value=settings.depth;this.saveSettings();};
+        const role=el('select',{'aria-label':'Роль памяти'});for(const [value,title]of [[0,'Система'],[1,'Пользователь'],[2,'Ассистент']])role.append(el('option',{value},title));role.value=settings.role;role.onchange=()=>{settings.role=Number(role.value);this.saveSettings();};
+        details.hidden=Number(settings.position)!==1;details.append(field('Глубина',depth),field('Роль',role),el('p',{class:'pv-muted'},'Глубина 0 — после последнего сообщения, 1 — перед последним.'));
+        const template=el('textarea',{class:'pv-short','aria-label':'Шаблон инжекта'},settings.template);template.onchange=()=>{settings.template=template.value;this.saveSettings();};
+        section.append(options,details,el('p',{class:'pv-muted'},'Memory Echo: {{memory_echo}}. Макрос в используемом промпте имеет приоритет над автоматической вставкой.'),field('Шаблон инжекта',template),el('p',{class:'pv-muted'},'Только для автоматической вставки. {{memory_echo}} обозначает память; без него память добавится после шаблона. Пустой шаблон оставляет только текст памяти.'));
+    }
     settingsView(archive) {
         const settings=this.e.settings();this.content.append(el('h3',{class:'pv-view-heading'},'Настройки'));
         const group=title=>{const section=el('fieldset',{class:'pv-setting-group'});section.append(el('legend',{},title));this.content.append(section);return section;};
-        const memory=group('Память'),messages=group('Создание глав'),archiveGroup=group('Архив'),appearance=group('Интерфейс');
+        const memory=group('Память'),placement=group('Подстановка памяти'),messages=group('Создание глав'),archiveGroup=group('Архив'),appearance=group('Интерфейс');
+        this.memoryPlacementView(placement,settings);
         const preview=el('input',{type:'checkbox',checked:settings.previewEpisodes,'aria-label':'Предпросмотр глав'});preview.onchange=()=>{settings.previewEpisodes=preview.checked;this.saveSettings();};const previewLabel=el('label');previewLabel.append(preview,document.createTextNode('Предпросмотр глав'));messages.append(previewLabel,el('p',{class:'pv-muted'},'Показывать готовую главу перед сохранением. Если выключено, успешный результат ручной генерации сохраняется сразу.'));
         for(const [key,title]of [['enabled','Включить расширение'],['inject','Внедрять активную память'],['exclude','Исключать обработанные сообщения после сохранения'],['collapse','Визуально сворачивать обработанные сообщения'],['pastNoteEnabled','Не акцентировать прошлые события без необходимости']]){
             const check=el('input',{type:'checkbox',checked:settings[key]});check.onchange=()=>{settings[key]=check.checked;this.saveSettings();this.refresh();};const l=el('label');l.append(check,document.createTextNode(title));(['enabled','inject'].includes(key)?memory:['exclude','collapse'].includes(key)?messages:appearance).append(l);
         }
         const limit=el('input',{type:'number',min:1,step:100,value:settings.tokenLimit});limit.onchange=()=>{if(Number.isFinite(Number(limit.value))&&Number(limit.value)>0){settings.tokenLimit=Math.floor(Number(limit.value));this.saveSettings();}else limit.value=settings.tokenLimit;};memory.append(field('Максимальный объём памяти, токенов',limit));
-        const position=el('select');for(const [v,t]of [[1,'В истории чата'],[0,'После основного промпта'],[2,'Перед основным промптом']])position.append(el('option',{value:v},t));position.value=settings.position;position.onchange=()=>{settings.position=Number(position.value);this.saveSettings();};
-        const depth=el('input',{type:'number',min:0,max:10000,value:settings.depth});depth.onchange=()=>{settings.depth=Math.max(0,Math.min(10000,Number(depth.value)||0));this.saveSettings();};
-        memory.append(field('Позиция внедрения',position),field('Глубина в истории чата',depth));
         const note=el('textarea',{class:'pv-short'},settings.pastNote);note.onchange=()=>{settings.pastNote=note.value;this.saveSettings();};appearance.append(field('Редактируемая пометка о прошлых событиях',note));
         const theme=el('select');theme.append(el('option',{value:'dark'},'Полуночный синий'),el('option',{value:'light'},'Светлый пергамент'));theme.value=settings.theme;theme.onchange=()=>{settings.theme=theme.value;this.panel.dataset.theme=theme.value;this.saveSettings();};appearance.append(field('Тема панели',theme));
         archiveGroup.append(el('p',{class:'pv-muted'},'Резервное копирование'));

@@ -20,7 +20,7 @@ test('numbering understands every previous and current prefix by stored type',()
  entries.push({...entries[0],id:'new-s',title:'Глава №20'},{...entries[4],id:'new-a',title:'Часть №21'});assert.equal(nextNumber('summary',entries),21);assert.equal(nextNumber('arc',entries),22);
 });
 test('existing prompt keys/settings stay untouched and new drafts reuse the old generation routes with new default titles',async()=>{
- const {file,chat}=fixture(),settings={...file.settings,prompts:file.prompts},c={chatId:'legacy-local',characterId:0,characters:[{avatar:'legacy.png'}],chat,chatMetadata:{pensieve:file.archive},extensionSettings:{pensieve:settings}},before=JSON.stringify(c);let saves=0,request;
+ const {file,chat}=fixture(),settings={...file.settings,role:0,template:'',prompts:file.prompts},c={chatId:'legacy-local',characterId:0,characters:[{avatar:'legacy.png'}],chat,chatMetadata:{pensieve:file.archive},extensionSettings:{pensieve:settings}},before=JSON.stringify(c);let saves=0,request;
  const host={context:()=>c,count:async()=>100,limits:()=>({context:32000,output:2000}),generate:async(prompt,source)=>{request={prompt,source};return 'DRAFT';},refresh(){},save(){saves++;}};
  const e=new Engine(host);assert.equal(e.settings().previewEpisodes,false);
  const chapter=await e.generateSummary(8,9);assert.equal(chapter.type,'summary');assert.equal(chapter.title,'Глава №10');assert.equal(request.prompt,file.prompts.summary.presets[0].text);assert.ok(request.source.includes('STORED_SOURCE_8'));
@@ -31,5 +31,5 @@ test('v1.6.4 backup remains idempotent and new exports keep all raw records, pro
  const {file,chat}=fixture(),parsed=parseBackup(oldText),before=JSON.stringify(parsed),merged=planRestore(parsed.archive,parsed,{targetKey:file.source.key,uuid:()=>{throw Error('No new IDs expected');},chat});
  assert.equal(merged.added,0);assert.equal(merged.skipped,7);assert.deepEqual(merged.archive.entries,parsed.archive.entries);
  const exported=createBackup(parsed.archive,{...parsed.settings,prompts:parsed.prompts},parsed.source),round=parseBackup(JSON.stringify(exported));
- assert.deepEqual(round.archive.entries,file.archive.entries);assert.deepEqual(round.prompts,file.prompts);assert.deepEqual(round.settings,file.settings);assert.equal(JSON.stringify(parsed),before);
+ assert.deepEqual(round.archive.entries,file.archive.entries);assert.deepEqual(round.prompts,file.prompts);assert.deepEqual(round.settings,{...file.settings,role:0,template:''});assert.equal(JSON.stringify(parsed),before);
 });

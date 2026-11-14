@@ -1,4 +1,5 @@
 import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
+import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
 export const KEY = 'pensieve';
 export const VOLUME_PROMPT='Объедини выбранные части ролевой истории в единый том долгосрочной памяти. Сохрани последовательность событий, причины и последствия, развитие персонажей и отношений, важные факты, тайны, решения, обещания, предметы и незавершённые сюжетные линии. Покажи актуальное состояние истории на конец тома. Удали повторения, сохраняя значимые сведения. Не копируй части механически, не придумывай событий и дат, не меняй хронологию. Используй только предоставленные тексты частей.';
 export const PROMPT_KEY = 'pensieve_active_memory_v1';
@@ -8,7 +9,7 @@ export const clone = value => structuredClone(value);
 export const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 export const defaults = () => ({
     enabled: true, inject: true, exclude: true, collapse: false, previewEpisodes:true,
-    tokenLimit: 6000, position: 1, depth: 4, theme: 'dark',
+    tokenLimit: 6000, position: 0, depth: 4, role:0, template:DEFAULT_INJECTION_TEMPLATE, theme: 'dark',
     pastNoteEnabled: true,
     pastNote: 'Ниже приведены сведения о ранее произошедших событиях. Учитывай их для последовательности истории и поведения персонажей, но не пересказывай прошлое без необходимости и не разыгрывай завершённые события повторно.',
     prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:'',history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:'',history:[]}] },volume:{selected:'default',presets:[{id:'default',name:'Основной',text:VOLUME_PROMPT,history:[]}]} },
