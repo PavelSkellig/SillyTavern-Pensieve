@@ -1,7 +1,8 @@
+import {tagError} from './diagnostics.js';
 import {MEMORY_ECHO} from './placement.js';
 
 const escape=text=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-const invalid=()=>Error('SillyTavern изменил служебные границы памяти при сборке промпта. Запрос не отправлен; повторите сборку.');
+const invalid=()=>tagError(Error('SillyTavern изменил служебные границы памяти при сборке промпта. Запрос не отправлен; повторите сборку.'),{code:'MEM-006',stage:'macro',reason:'envelope'});
 
 /** Request-local envelopes never touch saved messages, memories or prompt settings. */
 export class PromptEnvelope {
@@ -34,9 +35,9 @@ export class PromptEnvelope {
         const collect=nodes=>{for(const node of nodes){if(node.kind==='macro')macros.push(node);else if(node.kind==='auto')autos.push(node);else if(node.kind==='source')collect(node.children);}};
         for(const view of views)for(const part of view.parts)if(part.tree)collect(part.tree);
         const selected=macros[0]??(automatic?autos[0]:null),requested=macros.length>0||automatic;
-        if(requested&&memory.enabled&&memory.blocked)throw Error(memory.reason||'Блок памяти недоступен.');
+        if(requested&&memory.enabled&&memory.blocked)throw tagError(memory.failure??Error(memory.reason||'Блок памяти недоступен.'),memory.diagnostic??{code:'MEM-002',stage:'active'});
         const available=!!(memory.enabled&&!memory.blocked&&memory.text);
-        if(automatic&&available&&!selected)throw Error('SillyTavern не включил автоматическую вставку памяти в промпт. Проверьте позицию и глубину или используйте {{memory_echo}}.');
+        if(automatic&&available&&!selected)throw tagError(Error('SillyTavern не включил автоматическую вставку памяти в промпт. Проверьте позицию и глубину или используйте {{memory_echo}}.'),{code:'MEM-007',stage:'injection',reason:'missing-slot'});
         const delivered=!!(available&&selected),ids=memory.sourceIds??new Set();let bodyUsed=false;
         const render=(nodes,{auto=false,onlySlots=false}={})=>nodes.map(node=>{
             if(node.kind==='text')return onlySlots?'':node.text;

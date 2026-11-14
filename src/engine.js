@@ -1,3 +1,4 @@
+import {trace,tagError} from './diagnostics.js';
 import {normalisePromptPresets,mergePromptGroups} from './prompt-presets.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
@@ -8,7 +9,7 @@ import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
 
 export class Engine {
-    constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;}
+    constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';host.setEngine?.(this);}
     settings() {
         const c=this.host.context();
         c.extensionSettings[KEY]??=defaults();const settings=c.extensionSettings[KEY];
@@ -23,23 +24,23 @@ export class Engine {
     key(c=this.host.context()) {return JSON.stringify([c.groupId??null,c.characters[c.characterId]?.avatar??null,c.chatId]);}
     session() {
         const c=this.host.context();
-        if(!c.chatId||!Array.isArray(c.chat)||!c.chatMetadata)throw Error('Сначала откройте сохранённый чат персонажа или группы.');
+        if(!c.chatId||!Array.isArray(c.chat)||!c.chatMetadata)throw tagError(Error('Сначала откройте сохранённый чат персонажа или группы.'),{code:'MEM-001',stage:'chat',reason:'no-chat'});
         return {key:this.key(c),chat:c.chat,metadata:c.chatMetadata};
     }
     assert(s) {
         const c=this.host.context();
-        if(s.key!==this.key(c)||s.chat!==c.chat||s.metadata!==c.chatMetadata)throw Error('Чат изменился. Операция остановлена; вернитесь в исходный чат.');
+        if(s.key!==this.key(c)||s.chat!==c.chat||s.metadata!==c.chatMetadata)throw tagError(Error('Чат изменился. Операция остановлена; вернитесь в исходный чат.'),{code:'MEM-001',stage:'chat',reason:'chat-changed'});
     }
     archive(s=this.session()) {return s.metadata[KEY]??emptyArchive(s.key);}
     async run(fn) {
-        if(this.busy)throw Error('Другая операция уже выполняется. Дождитесь её завершения.');
-        this.busy=true;this.cancelled=false;
-        try{return await fn();}finally{this.busy=false;this.host.refresh?.();}
+        if(this.busy)throw tagError(Error('Другая операция уже выполняется. Дождитесь её завершения.'),{code:'INT-003',stage:'handler',reason:'busy'});
+        this.busy=true;this.cancelled=false;this.diagnosticState='running';
+        try{return await fn();}catch(error){throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.busy=false;this.cancelled=false;this.diagnosticState='idle';try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
     }
     cancel() {this.cancelled=true;this.host.cancel?.();}
     prompt(type) {
         const settings=this.settings(),p=settings.prompts[type],preset=p.presets.find(x=>x.id===settings.prompts.summary.selected);
-        if(!preset?.text.trim())throw Error(`Сначала сохраните свой промпт ${LEVELS[type].genitive} в разделе «Промпты».`);
+        if(!preset?.text.trim())throw tagError(Error(`Сначала сохраните свой промпт ${LEVELS[type].genitive} в разделе «Промпты».`),{code:'DATA-006',stage:'validation',reason:'missing-prompt'});
         return preset;
     }
     checkRange(s,range) {
@@ -59,21 +60,22 @@ export class Engine {
             if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Выберите их заново.');
             source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
         }
-        const preset=this.prompt(draft.type),limits=this.host.limits();
-        const tokens=await this.host.count(`${preset.text}\n\n${source}`);
+        const preset=this.prompt(draft.type),limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits());
+        const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>this.host.count(`${preset.text}\n\n${source}`));
         this.assert(s);
-        if(this.cancelled)throw Error('Генерация отменена до отправки запроса.');
-        if(!Number.isFinite(tokens)||!Number.isFinite(limits.context)||!Number.isFinite(limits.output))throw Error('Не удалось проверить лимит контекста модели.');
-        if(tokens+limits.output+256>limits.context)throw Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число записей либо увеличьте контекст в SillyTavern. Ничего не обрезано.`);
+        if(this.cancelled)throw tagError(Error('Генерация отменена до отправки запроса.'),{code:'GEN-006',stage:'api',reason:'cancel-user'});
+        if(!Number.isFinite(tokens)||!Number.isFinite(limits.context)||!Number.isFinite(limits.output))throw tagError(Error('Не удалось проверить лимит контекста модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
+        if(tokens+limits.output+256>limits.context)throw tagError(Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число записей либо увеличьте контекст в SillyTavern. Ничего не обрезано.`),{code:'MEM-005',stage:'tokens',reason:'context-local'});
         const unlock=this.host.lock?.();
         try {
-            const text=await this.host.generate(preset.text,source);
+            const text=await trace({code:'GEN-001',stage:'api',operation:'generate-'+draft.type,snapshot:{macroUsed:false,generation:'running'}},()=>this.host.generate(preset.text,source));
             this.assert(s);
-            if(this.cancelled)throw Error('Генерация отменена.');
+            if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:'cancel-user'});
             if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
-            if(typeof text!=='string'||!text.trim())throw Error('Модель вернула пустой ответ. Исходные сообщения не изменены.');
+            if(typeof text!=='string')throw tagError(Error('Модель вернула некорректный формат ответа. Исходные сообщения не изменены.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
+            if(!text.trim())throw tagError(Error('Модель вернула пустой ответ. Исходные сообщения не изменены.'),{code:'GEN-004',stage:'response',reason:'empty'});
             draft.text=text;draft.preset=preset.name;return draft;
-        } finally {unlock?.();}
+        } finally {try{unlock?.();}catch(error){this.host.report?.(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}),{severity:'warning'});try{this.host.emergencyUnlock?.();}catch(failure){this.host.report?.(failure,{code:'INT-004',stage:'unlock',reason:'release',notify:false});}}}
     }
     async generateSummary(start,end,{allowOverlap=false,replaceId=null}={}) {
         return this.run(async()=>{
@@ -106,14 +108,14 @@ export class Engine {
         archive.owner=s.key;archive.revision=(archive.revision||0)+1;
         s.metadata[KEY]=archive;
         const expected=JSON.stringify(archive);
-        await this.host.save();this.assert(s);
-        const disk=await this.host.read();this.assert(s);
-        if(JSON.stringify(disk.metadata?.[KEY])!==expected||verify&&!verify(disk))throw Error('Не удалось подтвердить сохранение на сервере. Источники не будут исключены без проверки. Проверьте соединение и используйте «Повторить сохранение / восстановление».');
+        await trace({stage:'save'},()=>this.host.save());this.assert(s);
+        const disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);
+        if(JSON.stringify(disk.metadata?.[KEY])!==expected||verify&&!verify(disk))throw tagError(Error('Не удалось подтвердить сохранение на сервере. Источники не будут исключены без проверки. Проверьте соединение и используйте «Повторить сохранение / восстановление».'),{stage:'save',reason:'save-unconfirmed'});
         if(bytes(archive)>WARN_ARCHIVE_BYTES)this.host.notify?.('warning','Архив больше 5 MiB. Рекомендуется экспортировать резервную копию.');
     }
     async saveDraft(draft,{title,text}) {
         return this.run(async()=>{
-            const s=draft.session;this.assert(s);
+            this.diagnosticState='saving';const s=draft.session;this.assert(s);
             if(!title?.trim()||!text?.trim())throw Error('Введите название и непустой текст.');
             const archive=clone(this.archive(s));if(archive.pending)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
             const committed=draft.commitId&&archive.entries.find(e=>e.id===draft.commitId);
@@ -323,32 +325,35 @@ export class Engine {
                     // Preserve any newer user edit instead of overwriting it during a late rollback.
                     if(Object.keys(desired).every(key=>JSON.stringify(settings[key])===JSON.stringify(desired[key]))){Object.assign(settings,clone(previous));try{await this.saveBackupGlobals(s,previousGlobals);globalsRollback=true;}catch{}}
                 }
-                let rollback=false;try{this.assert(s);await this.host.save();this.assert(s);const disk=await this.host.read();this.assert(s);rollback=JSON.stringify(disk.metadata?.[KEY])===JSON.stringify(previousArchive);}catch{}
+                let rollback=false;try{this.assert(s);await trace({stage:'save'},()=>this.host.save());this.assert(s);const disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);rollback=JSON.stringify(disk.metadata?.[KEY])===JSON.stringify(previousArchive);}catch{}
                 this.restoring=false;try{this.assert(s);await this.refreshMemory();}catch{}
                 throw Error(error.message+(rollback&&globalsRollback?' Предыдущее состояние восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив и настройки после подключения. Незавершённая копия не внедряется до проверки.'));
             }
         });
     }
     async memory() {
-        const s=this.session(),settings=this.settings(),archive=this.archive(s),entries=archive.entries;
-        const ordered=narrativeOrder(memoryEntries(entries),entries,s.chat);
-        const text=memoryText(entries,settings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
-        const sources=memorySources(entries,s.chat,s.key,ordered.entries);
-        const conflicts=memoryConflicts(entries,s.key),sourceConflicts=importedSourceConflicts(entries,s.chat).filter(c=>!sources.episodes.has(c.entryId)),enabled=settings.enabled&&settings.inject;
-        const limits=this.host.limits(),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
+        const s=trace({code:'MEM-001',stage:'chat'},()=>this.session()),settings=this.settings(),entries=trace({code:'MEM-002',stage:'active'},()=>this.archive(s).entries),archive=this.archive(s);
+        const active=trace({code:'MEM-003',stage:'hierarchy'},()=>memoryEntries(entries));
+        const ordered=trace({code:'MEM-003',stage:'hierarchy'},()=>narrativeOrder(active,entries,s.chat));
+        const text=trace({code:'MEM-004',stage:'content'},()=>memoryText(entries,settings,ordered.entries));
+        const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>this.host.count(text));this.assert(s);
+        const sources=trace({code:'MEM-008',stage:'sources'},()=>memorySources(entries,s.chat,s.key,ordered.entries));
+        const conflicts=trace({code:'MEM-003',stage:'hierarchy'},()=>memoryConflicts(entries,s.key)),sourceConflicts=trace({code:'MEM-008',stage:'sources'},()=>importedSourceConflicts(entries,s.chat).filter(c=>!sources.episodes.has(c.entryId))),enabled=settings.enabled&&settings.inject;
+        const limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits()),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
         const blocked=enabled&&(!!this.restoring||!!archive.pending||sourceConflicts.length>0||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,placement:Number(settings.position),limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
+        const diagnostic=this.restoring||archive.pending?{code:'MEM-002',stage:'active',reason:'pending'}:sourceConflicts.length?{code:'MEM-010',stage:'sources',reason:'source-duplicate'}:conflicts.length?{code:'MEM-010',stage:'hierarchy',reason:'memory-overlap'}:!Number.isFinite(tokens)?{code:'MEM-005',stage:'tokens',reason:'count-invalid'}:!Number.isFinite(limits.context)||!Number.isFinite(limits.output)?{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'}:modelOverflow?{code:'MEM-005',stage:'tokens',reason:'context-local'}:{code:'MEM-005',stage:'tokens',reason:'memory-limit'};
+        return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,diagnostic,placement:Number(settings.position),limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     async prepareContext(request,type='normal',{deferDelivery=false}={}) {
         let s;try{s=this.session();}catch{return this.refreshMemory();}
-        if(!Array.isArray(request)||request===s.chat)throw Error('Для формирования контекста требуется отдельная копия сообщений.');
+        if(!Array.isArray(request)||request===s.chat)throw tagError(Error('Для формирования контекста требуется отдельная копия сообщений.'),{code:'MEM-008',stage:'sources',reason:'separate-copy'});
         const memory=await this.refreshMemory();this.assert(s);
         if(memory.enabled&&!memory.blocked&&memory.placement!==-1&&!deferDelivery){
             const ids=memory.sourceIds??new Set();
             // ST derives Continue's writeback prefix from the terminal request item.
             // Removing a covered terminal source would overwrite it with another message.
-            if(type==='continue'&&ids.has(s.chat.at(-1)?.extra?.[KEY]?.id))throw Error('Дописывание этого сообщения остановлено: оно уже входит в активную память. Для новой реплики используйте обычную отправку в чат. Исходный текст сохранён.');
-            stripMemorySources(request,s.chat,ids);
+            if(type==='continue'&&ids.has(s.chat.at(-1)?.extra?.[KEY]?.id))throw tagError(Error('Дописывание этого сообщения остановлено: оно уже входит в активную память. Для новой реплики используйте обычную отправку в чат. Исходный текст сохранён.'),{code:'MEM-010',stage:'sources',reason:'continue-covered'});
+            trace({code:'MEM-008',stage:'sources'},()=>stripMemorySources(request,s.chat,ids));
         }
         return memory;
     }
@@ -373,3 +378,8 @@ export class Engine {
     orderEntries(entries=null) {const s=this.session(),all=this.archive(s).entries;return narrativeOrder(entries??chronological(all),all,s.chat);}
     entries() {return this.orderEntries().entries;}
 }
+
+const operationMeta={generateSummary:{operation:'generate-summary',stage:'handler'},generateArc:{operation:'generate-arc',stage:'handler'},generateVolume:{operation:'generate-volume',stage:'handler'},memory:{code:'MEM-002',stage:'active',operation:'context'},prepareContext:{code:'MEM-009',stage:'handoff',operation:'context'},refreshMemory:{code:'MEM-007',stage:'injection',operation:'context'},restoreBackup:{code:'DATA-009',stage:'restore',operation:'backup-restore'},importArchive:{code:'DATA-007',stage:'import',operation:'backup-import'},recover:{code:'DATA-009',stage:'restore',operation:'backup-restore'},change:{code:'DATA-010',stage:'save',operation:'archive-edit'}};
+for(const [name,meta]of Object.entries(operationMeta)){const method=Engine.prototype[name];Engine.prototype[name]=function(...args){return trace(meta,()=>method.apply(this,args));};}
+const saveDraft=Engine.prototype.saveDraft;
+Engine.prototype.saveDraft=function(draft,...args){const code={episode:'DATA-001',summary:'DATA-002',arc:'DATA-003',volume:'DATA-004'}[draft?.type]??'DATA-010';return trace({code,stage:'save',operation:'save-'+draft?.type},()=>saveDraft.call(this,draft,...args));};

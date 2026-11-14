@@ -1,6 +1,7 @@
 import {VERSION} from './version.js';
 import {fingerprint} from './core.js';
-import {ERRORS,STAGES,OPERATIONS,REASONS} from './diagnostic-catalog.js';
+import {ERRORS,STAGES,OPERATIONS,REASONS,STATIC_MESSAGES} from './diagnostic-catalog.js';
+const knownMessages=new Map(Object.entries(STATIC_MESSAGES).map(([id,text])=>[text,id]));
 const tags=new WeakMap(),classes=new Set(['Error','TypeError','SyntaxError','RangeError','ReferenceError','TimeoutError','AbortError','AggregateError']);
 const files=new Set(['index.js','engine.js','host.js','core.js','ui.js','memory-echo.js','prompt-envelope.js','placement.js','source-links.js','order.js','hierarchy.js','backup.js','prompt-presets.js','builtin-prompts.js','generation-view.js','diagnostics.js','diagnostic-catalog.js','diagnostics-view.js','version.js','script.js','openai.js','macros.js','macro-system.js','eventemitter.js']);
 const apiCodes=new Set(['context_length_exceeded','max_tokens_exceeded','token_limit_exceeded','invalid_api_key','authentication_error','insufficient_quota','rate_limit_exceeded','rate_limit_error','request_timeout','timeout']);
@@ -11,7 +12,7 @@ const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=1e7?value:null;
 const objectError=error=>error&&(typeof error==='object'||typeof error==='function')?error:Error('Ошибка без объекта исключения');
 const enumValue=(map,value,fallback)=>Object.hasOwn(map,value)?value:fallback;
 export function tagError(error,meta={}){
-    error=objectError(error);const old=tags.get(error)??{},merged={...meta,...old};
+    error=objectError(error);const old=tags.get(error)??{},merged={...Object.fromEntries(Object.entries(meta).filter(([,v])=>v!==undefined)),...Object.fromEntries(Object.entries(old).filter(([,v])=>v!==undefined))};
     if(old.operation==='unknown'&&meta.operation)merged.operation=meta.operation;
     tags.set(error,merged);return error;
 }
@@ -31,6 +32,7 @@ function safeSnapshot(value={}){
 }
 function technical(entry){
     const parts=[entry.kind];if(entry.http)parts.push('HTTP '+entry.http);if(entry.apiCode)parts.push('API: '+entry.apiCode);
+    if(entry.messageId)parts.push(STATIC_MESSAGES[entry.messageId]);
     if(entry.reason!=='unknown')parts.push(REASONS[entry.reason]);else parts.push('Исходное сообщение скрыто: может содержать личные данные.');
     return parts.join('; ');
 }
@@ -48,16 +50,16 @@ function classify(error,meta){
         else if(['insufficient_quota','rate_limit_exceeded','rate_limit_error'].includes(apiCode)||http===429)reason='api-rate';
         else if(raw==='Failed to fetch'||raw==='NetworkError when attempting to fetch resource.')reason='network';
     }
-    return {code,reason,stage,kind,http,apiCode,operation:enumValue(OPERATIONS,meta.operation,'unknown'),severity:severities.has(meta.severity)?meta.severity:code==='GEN-006'?'info':code==='UI-001'?'warning':'error',status:statuses.has(meta.status)?meta.status:code==='GEN-006'?'canceled':code==='UI-001'?'warning':'error',frames:safeFrames(read(error,'stack'))};
+    return {code,reason,stage,kind,http,apiCode,messageId:knownMessages.get(raw)??null,operation:enumValue(OPERATIONS,meta.operation,'unknown'),severity:severities.has(meta.severity)?meta.severity:code==='GEN-006'?'info':code==='UI-001'?'warning':'error',status:statuses.has(meta.status)?meta.status:code==='GEN-006'?'canceled':code==='UI-001'?'warning':'error',frames:safeFrames(read(error,'stack'))};
 }
 function validEntry(value){
     if(!value||!Object.hasOwn(ERRORS,value.code)||!Number.isFinite(value.time)||value.time<0||value.time>9e12)return null;
-    const e={id:typeof value.id==='string'&&/^\d+-\d+$/.test(value.id)?value.id:'0-0',time:value.time,lastTime:Number.isFinite(value.lastTime)&&value.lastTime>=value.time&&value.lastTime<=9e12?value.lastTime:value.time,repeats:count(value.repeats)||1,code:value.code,reason:enumValue(REASONS,value.reason,'unknown'),stage:enumValue(STAGES,value.stage,ERRORS[value.code].stage),operation:enumValue(OPERATIONS,value.operation,'unknown'),kind:classes.has(value.kind)?value.kind:'Error',http:Number.isInteger(value.http)&&value.http>=100&&value.http<=599?value.http:null,apiCode:apiCodes.has(value.apiCode)?value.apiCode:null,severity:severities.has(value.severity)?value.severity:'error',status:statuses.has(value.status)?value.status:'error',version:version(value.version)??VERSION,stVersion:version(value.stVersion),...safeSnapshot(value),frames:Array.isArray(value.frames)?value.frames.filter(f=>files.has(f.file)&&Number.isInteger(f.line)&&f.line>=0&&f.line<1e6&&Number.isInteger(f.column)&&f.column>=0&&f.column<1e6).slice(0,8).map(f=>({file:f.file,line:f.line,column:f.column})):[]};
+    const e={id:typeof value.id==='string'&&/^\d+-\d+$/.test(value.id)?value.id:'0-0',time:value.time,lastTime:Number.isFinite(value.lastTime)&&value.lastTime>=value.time&&value.lastTime<=9e12?value.lastTime:value.time,repeats:count(value.repeats)||1,code:value.code,reason:enumValue(REASONS,value.reason,'unknown'),stage:enumValue(STAGES,value.stage,ERRORS[value.code].stage),operation:enumValue(OPERATIONS,value.operation,'unknown'),kind:classes.has(value.kind)?value.kind:'Error',messageId:Object.hasOwn(STATIC_MESSAGES,value.messageId)?value.messageId:null,http:Number.isInteger(value.http)&&value.http>=100&&value.http<=599?value.http:null,apiCode:apiCodes.has(value.apiCode)?value.apiCode:null,severity:severities.has(value.severity)?value.severity:'error',status:statuses.has(value.status)?value.status:'error',version:version(value.version)??VERSION,stVersion:version(value.stVersion),...safeSnapshot(value),frames:Array.isArray(value.frames)?value.frames.filter(f=>files.has(f.file)&&Number.isInteger(f.line)&&f.line>=0&&f.line<1e6&&Number.isInteger(f.column)&&f.column>=0&&f.column<1e6).slice(0,8).map(f=>({file:f.file,line:f.line,column:f.column})):[]};
     e.technical=technical(e);return e;
 }
 export function describeError(value){
     const e=validEntry(value);if(!e)return null;
-    const reason=REASONS[e.reason]+(e.http?' Получен HTTP '+e.http+'.':'');
+    const reason=(e.reason==='unknown'&&e.messageId?'Обнаружено: '+STATIC_MESSAGES[e.messageId]:REASONS[e.reason])+(e.http?' Получен HTTP '+e.http+'.':'');
     return {title:ERRORS[e.code].title,reason,action:ERRORS[e.code].action,stage:STAGES[e.stage],operation:OPERATIONS[e.operation],technical:e.technical,stack:e.frames.map(f=>`${f.file}:${f.line}:${f.column}`).join('\n')||'Безопасные кадры стека недоступны.',brief:`Ошибка: ${ERRORS[e.code].title}.\nПричина: ${reason}\nЭтап: ${STAGES[e.stage]}.\nЧто делать: ${ERRORS[e.code].action}`};
 }
 export function formatDiagnosticReport(entries){
@@ -83,11 +85,13 @@ export class Diagnostics {
     }
     report(error,meta={}){
         try{
-            this.load();error=objectError(error);const seen=this.seen.get(error);if(seen?.key===this.key){const previous=this.records.find(e=>e.id===seen.id);if(previous)return structuredClone(previous);}
-            const info=classify(error,{...meta,...(tags.get(error)??{})});let snapshot={};try{snapshot=safeSnapshot(this.getSnapshot());}catch{}
+            this.load();error=objectError(error);const seen=this.seen.get(error);
+            const info=classify(error,{...meta,...(tags.get(error)??{})});let snapshot={};try{snapshot=safeSnapshot({...this.getSnapshot(),...(meta.snapshot??{}),...((tags.get(error)??{}).snapshot??{})});}catch{}
             const time=this.now(),entry=validEntry({...info,...snapshot,id:`${time}-${++this.serial}`,time,lastTime:time,repeats:1,version:VERSION,stVersion:typeof this.stVersion==='function'?this.stVersion():this.stVersion});
-            if(!entry)return null;while(this.records.some(e=>e.id===entry.id))entry.id=`${time}-${++this.serial}`;
-            const signature=e=>JSON.stringify([e.code,e.reason,e.stage,e.operation,e.kind,e.http,e.apiCode,e.mode,e.macroUsed,e.generation,e.status,e.severity]);
+            if(!entry)return null;
+            if(seen?.key===this.key){const previous=this.records.find(e=>e.id===seen.id);if(previous){const rank={info:0,warning:1,error:2};if(rank[entry.severity]>rank[previous.severity]||entry.status==='blocked'&&previous.status!=='blocked'){this.records=this.records.filter(e=>e!==previous);this.records.push(previous);Object.assign(previous,{severity:entry.severity,status:entry.status,lastTime:time,macroUsed:entry.macroUsed,generation:entry.generation});this.persist();this.emit(previous,meta.notify!==false);}return structuredClone(previous);}}
+            while(this.records.some(e=>e.id===entry.id))entry.id=`${time}-${++this.serial}`;
+            const signature=e=>JSON.stringify([e.code,e.reason,e.stage,e.operation,e.kind,e.http,e.apiCode,e.messageId,e.frames,e.mode,e.macroUsed,e.generation,e.status,e.severity]);
             const repeated=this.records.find(e=>time-e.lastTime<60000&&time>=e.lastTime&&signature(e)===signature(entry));
             if(repeated){this.records=this.records.filter(e=>e!==repeated);this.records.push(repeated);repeated.lastTime=time;repeated.repeats=Math.min(1e7,repeated.repeats+1);this.seen.set(error,{key:this.key,id:repeated.id});this.persist();this.emit(repeated,false);return structuredClone(repeated);}
             this.records.push(entry);this.records=this.records.slice(-20);this.seen.set(error,{key:this.key,id:entry.id});this.persist();
@@ -97,4 +101,12 @@ export class Diagnostics {
     }
     reportText(entries=this.entries){return formatDiagnosticReport(entries);}
     clear(){this.load();this.records=[];this.persist();this.emit(null,false);}
+}
+
+export function diagnosticSnapshot(context,engine=null,core={}) {
+    try{
+        const c=context(),settings=c.extensionSettings?.pensieve??{},entries=c.chatMetadata?.pensieve?.entries,active={episodes:0,chapters:0,parts:0,volumes:0};
+        if(Array.isArray(entries))for(const e of entries)if(e?.active){const key={episode:'episodes',summary:'chapters',arc:'parts',volume:'volumes'}[e.type];if(key)active[key]++;}
+        return safeSnapshot({mode:Number(settings.position),active,generation:engine?.busy?(engine.diagnosticState??'running'):(core.isGenerating?.()?'running':'idle')});
+    }catch{return safeSnapshot();}
 }

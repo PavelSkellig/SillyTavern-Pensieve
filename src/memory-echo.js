@@ -1,3 +1,4 @@
+import {trace,tagError} from './diagnostics.js';
 import {KEY} from './core.js';
 import {MEMORY_ECHO,automaticMemory} from './placement.js';
 import {memorySources} from './source-links.js';
@@ -23,19 +24,19 @@ export class MemoryEcho {
     get job(){return this.jobs.at(-1);}
     stamp(s){return JSON.stringify([s?this.engine.archive(s).revision:null,this.engine.settings()]);}
     assert(job){
-        if(job.invalidated)throw Error('Чат изменился во время сборки памяти. Повторите запрос.');
+        if(job.invalidated)throw tagError(Error('Чат изменился во время сборки памяти. Повторите запрос.'),{code:'MEM-001',stage:'chat',reason:'chat-changed'});
         if(job.session)this.engine.assert(job.session);
-        else{let s;try{s=this.engine.session();}catch{}if(s)throw Error('Чат изменился во время сборки памяти. Повторите запрос.');}
-        if(job.stamp!==this.stamp(job.session))throw Error('Память или её настройки изменились во время сборки. Повторите запрос.');
+        else{let s;try{s=this.engine.session();}catch{}if(s)throw tagError(Error('Чат изменился во время сборки памяти. Повторите запрос.'),{code:'MEM-001',stage:'chat',reason:'chat-changed'});}
+        if(job.stamp!==this.stamp(job.session))throw tagError(Error('Память или её настройки изменились во время сборки. Повторите запрос.'),{code:'MEM-002',stage:'active',reason:'state-changed'});
     }
     attach(registerMacro){
-        if(this.attached)return;this.attached=true;registerMacro(()=>this.macro());
+        if(this.attached)return;this.attached=true;trace({code:'MEM-011',stage:'registration',operation:'startup'},()=>registerMacro(()=>this.macro()));
         const {eventSource:events,eventTypes:t}=this.host.context();
         events.on(t.GENERATE_BEFORE_COMBINE_PROMPTS,data=>this.captureFrames(data));
         events.on(t.GENERATE_AFTER_COMBINE_PROMPTS,async data=>{
             if(data.dryRun||this.engine.busy||!hasEcho(data.prompt))return;
             const job=this.job,normal=job&&!job.finalized&&job.tcHistory&&data.prompt.includes(job.tcHistory);
-            try{if(normal){await this.finalize(data,false,job);job.tcPrepared=true;}else await this.finalizeRaw(data);}catch(error){this.fail(error,normal?job:null);}
+            try{if(normal){await this.finalize(data,false,job);job.tcPrepared=true;}else await this.finalizeRaw(data);}catch(error){this.fail(error,normal?job:null,data);}
         });
         events.on(t.GENERATE_AFTER_DATA,async(data,dryRun)=>{
             const job=this.job;
@@ -45,12 +46,12 @@ export class MemoryEcho {
                 if(job.tcPrepared){this.assert(job);await this.resolveLate(data,job);}
                 else await this.finalize(data,false,job);
                 if(this.host.context().mainApi==='openai')for(const m of data.prompt??[])m[REQUEST]=job;
-            }catch(error){this.fail(error,job);}
+            }catch(error){this.fail(error,job,data);}
         });
         events.on(t.CHAT_COMPLETION_SETTINGS_READY,async data=>{
             if(data.messages?.some(m=>m[LITERAL_PROMPT]))return;
             const job=data.messages?.find(m=>m[REQUEST])?.[REQUEST];
-            try{if(job){this.assert(job);await this.resolveLate(data,job);}else await this.finalizeRaw(data);}catch(error){this.fail(error,job);}
+            try{if(job){this.assert(job);await this.resolveLate(data,job);}else await this.finalizeRaw(data);}catch(error){this.fail(error,job,data);}
         });
         events.on(t.GENERATION_ENDED,()=>this.end());
         events.on(t.GENERATION_STOPPED,()=>{if(this.job)this.job.invalidated=true;});
@@ -64,7 +65,7 @@ export class MemoryEcho {
         const job={type,session,automatic:Number(this.engine.settings().position)!==-1,finalized:false,sources:[],frames:[]};
         job.stamp=this.stamp(session);this.jobs.push(job);
         try{job.memory=await this.engine.refreshMemory();this.assert(job);}
-        catch(error){job.error=error;job.memory={enabled:!!(this.engine.settings().enabled&&this.engine.settings().inject),blocked:true,reason:error.message,text:'',sourceIds:new Set()};}
+        catch(error){job.error=error;job.memory={failure:error,enabled:!!(this.engine.settings().enabled&&this.engine.settings().inject),blocked:true,reason:error.message,text:'',sourceIds:new Set()};}
         return job;
     }
     async prepare(request,type='normal'){
@@ -72,8 +73,8 @@ export class MemoryEcho {
         const job=this.job;if(job.request===request)return job.memory;
         this.assert(job);job.request=request;
         try{job.memory=await this.engine.prepareContext(request,type,{deferDelivery:!job.automatic});this.assert(job);}
-        catch(error){if(job.automatic)throw error;job.memory={enabled:true,blocked:true,reason:error.message,text:'',sourceIds:new Set()};}
-        if(job.automatic&&job.memory.enabled&&job.memory.blocked)throw Error(job.memory.reason);
+        catch(error){if(job.automatic)throw error;job.memory={failure:error,enabled:true,blocked:true,reason:error.message,text:'',sourceIds:new Set()};}
+        if(job.automatic&&job.memory.enabled&&job.memory.blocked)throw tagError(job.memory.failure??Error(job.memory.reason),job.memory.diagnostic??{code:'MEM-002',stage:'active'});
         job.memory.sourceIds??=new Set();
         if(type==='continue'){const ref=job.session?.chat.at(-1);job.continueTarget={ref,text:ref?.mes,hasEcho:hasEcho(request.at(-1)?.mes)};}
         job.records=request.map(m=>({id:m.extra?.[KEY]?.id,body:m.mes.replace(/\r/g,''),name:m.name,media:!!m.extra?.media?.length,role:m.is_user?'user':m.extra?.type==='narrator'?'system':'assistant',toolIds:(m.extra?.tool_invocations??[]).map(t=>t.id)}));
@@ -88,7 +89,7 @@ export class MemoryEcho {
     }
     decorate(input,job,envelope,automatic){
         let autoFound=false;
-        const memory=job.memory,block=usable(memory)?automaticMemory(memory.text,this.engine.settings()):'';
+        const memory=job.memory,block=usable(memory)?trace({code:'MEM-012',stage:'injection',operation:'context'},()=>automaticMemory(memory.text,this.engine.settings())):'';
         let prompt=mapText(input,text=>{
             if(automatic&&block&&!autoFound&&text.includes(block)){
                 autoFound=true;const body=envelope.wrap('body',memory.text),internal=block.replace(memory.text,body);return text.replace(block,envelope.wrap('auto',internal));
@@ -112,33 +113,33 @@ export class MemoryEcho {
         if(typeof input!=='string'&&!Array.isArray(input))return null;
         if(!automatic&&!already&&!hasEcho(textOf(input)+textOf([data.assistant_prefill??'',data.negative_prompt??''])))return {prompt:input,delivered:false,kind:null,hadMacro:false};
         const envelope=new PromptEnvelope(this.host.uuid()),extraFields=['assistant_prefill','negative_prompt'].filter(k=>typeof data[k]==='string');
-        let decorated=this.decorate(input,job,envelope,automatic);
+        let decorated=trace({code:'MEM-008',stage:'sources',operation:'context'},()=>this.decorate(input,job,envelope,automatic));
         if(extraFields.length)decorated=[...(typeof decorated==='string'?[{content:decorated,pvField:key}]:decorated),...extraFields.map(k=>({content:data[k],pvField:k}))];
         // A first actual macro resolved before provider-specific parameters owns the block.
         if(already==='macro')decorated=mapText(decorated,text=>{
             const opaque=envelope.wrap('literal','',{text:job.memory.text});
             return text.replace(job.memory.text,opaque).replace(new RegExp(MEMORY_ECHO.source,'gi'),'');
         });
-        const result=envelope.resolve(decorated,job.memory,automatic&&already!=='macro');
+        const result=trace({code:'MEM-006',stage:'macro',operation:'context'},()=>envelope.resolve(decorated,job.memory,automatic&&already!=='macro'));job.usedMacro=result.hadMacro;
         const delivered=result.delivered||!!already;
-        if(delivered&&job.continueTarget){const t=job.continueTarget;if(job.session.chat.at(-1)!==t.ref||t.ref?.mes!==t.text||job.memory.sourceIds.has(t.ref?.extra?.[KEY]?.id)||t.hasEcho)throw Error('Дописывание остановлено: последнее сообщение уже использует активную память. Для новой реплики используйте обычную отправку. Исходный текст сохранён.');}
+        if(delivered&&job.continueTarget){const t=job.continueTarget;if(job.session.chat.at(-1)!==t.ref||t.ref?.mes!==t.text||job.memory.sourceIds.has(t.ref?.extra?.[KEY]?.id)||t.hasEcho)throw tagError(Error('Дописывание остановлено: последнее сообщение уже использует активную память. Для новой реплики используйте обычную отправку. Исходный текст сохранён.'),{code:'MEM-010',stage:'sources',reason:'continue-covered'});}
         let output=result.prompt;
         if(delivered&&Array.isArray(output)){
             const ids=new Set((job.sources??[]).flatMap(s=>s.toolIds));
             output=output.filter(m=>!(m.tool_call_id&&ids.has(m.tool_call_id))&&!m.tool_calls?.some(t=>ids.has(t.id)));
         }
         if(delivered&&job.session){
-            const ids=memorySources(this.engine.archive(job.session).entries,job.session.chat,job.session.key,job.memory.entries).ids;
-            if([...job.memory.sourceIds].some(id=>!ids.has(id)))throw Error('Исходные сообщения изменились во время сборки памяти. Повторите запрос.');
-            const [before,after]=await Promise.all([this.host.count(textOf(input)+extraFields.map(k=>data[k]).join('')),this.host.count(textOf(output))]);this.assert(job);const l=this.host.limits();
-            if(!Number.isFinite(before)||!Number.isFinite(after)||after>before&&after+l.output+256>l.context)throw Error('Промпт с Memory Echo превышает контекст модели. Уменьшите объём памяти; записи не обрезаны.');
+            const ids=trace({code:'MEM-008',stage:'sources',operation:'context'},()=>memorySources(this.engine.archive(job.session).entries,job.session.chat,job.session.key,job.memory.entries).ids);
+            if([...job.memory.sourceIds].some(id=>!ids.has(id)))throw tagError(Error('Исходные сообщения изменились во время сборки памяти. Повторите запрос.'),{code:'MEM-008',stage:'sources',reason:'source-changed'});
+            const [before,after]=await trace({code:'MEM-005',stage:'tokens',operation:'context'},()=>Promise.all([this.host.count(textOf(input)+extraFields.map(k=>data[k]).join('')),this.host.count(textOf(output))]));this.assert(job);const l=this.host.limits();
+            if(!Number.isFinite(before)||!Number.isFinite(after)||after>before&&after+l.output+256>l.context)throw tagError(Error('Промпт с Memory Echo превышает контекст модели. Уменьшите объём памяти; записи не обрезаны.'),{code:'MEM-005',stage:'tokens',reason:!Number.isFinite(before)||!Number.isFinite(after)?'count-invalid':'context-local'});
         }
         if(extraFields.length){for(const field of extraFields)data[field]=output.find(m=>m.pvField===field)?.content??'';output=typeof input==='string'?output.find(m=>m.pvField===key)?.content??'':output.filter(m=>!m.pvField);}
         data[key]=output;return {...result,prompt:output,delivered,kind:already==='macro'?'macro':result.kind??already};
     }
     async finalize(data,_dryRun=false,job=this.job){
         if(!job)return this.finalizeRaw(data);
-        const result=await this.resolve(data,job);job.finalized=true;job.result=result;return result;
+        const result=await this.resolve(data,job);if(!result?.delivered&&job.memory.failure)this.host.report?.(job.memory.failure,{operation:'context',severity:'warning',snapshot:{macroUsed:false,generation:'running'}});job.finalized=true;job.result=result;return result;
     }
     async resolveLate(data,job){
         const key=promptKey(data),text=textOf(data[key])+textOf([data.assistant_prefill??'',data.negative_prompt??'']);
@@ -154,11 +155,16 @@ export class MemoryEcho {
         job.memory=session?await this.engine.memory(session):{enabled:false,text:'',sourceIds:new Set()};
         return this.resolve(data,job,{automatic:false});
     }
-    fail(error,job=this.job){
+    fail(error,job=this.job,data=null){
         if(job)job.finalized=true;
-        // Native EventEmitter catches listener exceptions: explicit abort is mandatory.
-        this.host.context().stopGeneration?.();this.host.inject('');this.host.notify?.('error',error.message);this.onError(error);
+        const record=this.host.report?.(error,{operation:'context',status:'blocked',snapshot:{macroUsed:job?.usedMacro??null,generation:'running'}});
+        // Native EventEmitter swallows errors. Serialization also fails closed if Stop itself fails.
+        if(data&&typeof data==='object')try{Object.defineProperty(data,'toJSON',{configurable:true,value(){throw Error('Омут памяти остановил передачу некорректного контекста.');}});}catch{}
+        try{this.host.context().stopGeneration?.();}catch(failure){this.host.report?.(tagError(failure,{code:'INT-004',stage:'unlock',reason:'release'}),{operation:'context',notify:false});try{this.host.emergencyUnlock?.();}catch{}}
+        try{this.host.inject('');}catch(failure){this.host.report?.(failure,{code:'MEM-007',stage:'injection',operation:'context',notify:false});}
+        try{this.onError(error,record);}catch(failure){this.host.report?.(failure,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning',notify:false});}
     }
+
     end(){this.jobs.pop();const memory=this.engine.peekMemory();this.host.inject(usable(memory)?memory.text:'');}
 }
 
@@ -171,3 +177,5 @@ export async function installMemoryEcho(engine,options) {
     });
     return echo;
 }
+
+for(const [name,meta]of Object.entries({prepare:{code:'MEM-002',stage:'active'},resolve:{code:'MEM-009',stage:'handoff'},finalizeRaw:{code:'MEM-006',stage:'macro'},end:{code:'MEM-007',stage:'injection'},captureFrames:{code:'MEM-008',stage:'sources'}})){const original=MemoryEcho.prototype[name];MemoryEcho.prototype[name]=function(...args){return trace({...meta,operation:'context'},()=>original.apply(this,args));};}
