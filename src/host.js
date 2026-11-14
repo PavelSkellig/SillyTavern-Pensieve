@@ -36,7 +36,7 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             // raw request lets us restore the user's exact prompt and source after that formatting.
             const nonce=`PENSIEVE_LITERAL_${c.uuidv4()}`;
             const event=api==='openai'?c.eventTypes.CHAT_COMPLETION_PROMPT_READY:c.eventTypes.GENERATE_AFTER_COMBINE_PROMPTS;
-            let applied=false;
+            let applied=false;const nativeCancel=()=>cancelCurrent?.('cancel-unknown');
             const literal=payload=>{
                 if(api==='openai') {
                     if(!payload.chat?.some(m=>typeof m.content==='string'&&m.content.includes(nonce)))return;
@@ -49,14 +49,15 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             };
             c.eventSource.on(event,literal);
             try {
-                let cancel;const stopped=new Promise((_,reject)=>cancel=(reason='cancel-user')=>reject(tagError(Object.assign(Error('Генерация отменена.'),{name:'AbortError'}),{code:'GEN-006',stage:'api',reason:reason==='chat-changed'?'chat-changed':'cancel-user',snapshot:{macroUsed:false,generation:'canceled'}})));cancelCurrent=cancel;
+                let cancel;const stopped=new Promise((_,reject)=>cancel=(reason='cancel-user')=>reject(tagError(Object.assign(Error('Генерация отменена.'),{name:'AbortError'}),{code:'GEN-006',stage:'api',reason:['chat-changed','cancel-unknown'].includes(reason)?reason:'cancel-user',snapshot:{macroUsed:false,generation:'canceled'}})));cancelCurrent=cancel;
+                c.eventSource.on(c.eventTypes.GENERATION_STOPPED,nativeCancel);
                 const data=await trace({code:'GEN-001',stage:'api',snapshot:{macroUsed:false,generation:'running'}},()=>Promise.race([c.generateRawData({api,prompt:[{role:'user',content:nonce}],systemPrompt:'',instructOverride:true,quietToLoud:true}),stopped]));
                 if(!applied)throw tagError(Error('SillyTavern не применил буквальный пользовательский промпт. Генерация не сохранена.'),{code:'GEN-005',stage:'response',reason:'literal-hook'});
                 const reason=data?.choices?.[0]?.finish_reason??data?.stop_reason??data?.candidates?.[0]?.finishReason;
                 if(['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason))throw tagError(Error('Ответ модели обрезан лимитом. Увеличьте длину ответа в SillyTavern и повторите.'),{code:'GEN-007',stage:'response',reason:'truncated'});
                 if(['content_filter','safety','SAFETY','refusal'].includes(reason))throw tagError(Error('Модель остановила ответ фильтром. Исходники не изменены.'),{code:'GEN-008',stage:'response',reason:'refused'});
                 return trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));
-            } finally {cancelCurrent=null;c.eventSource.removeListener(event,literal);}
+            } finally {cancelCurrent=null;c.eventSource.removeListener(c.eventTypes.GENERATION_STOPPED,nativeCancel);c.eventSource.removeListener(event,literal);}
         },
         save:()=>trace({stage:'save'},()=>context().saveMetadata()),
         async saveSettings(expected) {

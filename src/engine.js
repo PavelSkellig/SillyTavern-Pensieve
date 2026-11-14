@@ -27,6 +27,7 @@ export class Engine {
         if(!c.chatId||!Array.isArray(c.chat)||!c.chatMetadata)throw tagError(Error('Сначала откройте сохранённый чат персонажа или группы.'),{code:'MEM-001',stage:'chat',reason:'no-chat'});
         return {key:this.key(c),chat:c.chat,metadata:c.chatMetadata};
     }
+    optionalSession() {try{return this.session();}catch(error){if(errorMeta(error).reason==='no-chat')return null;throw tagError(error,{code:'MEM-001',stage:'chat'});}}
     assert(s) {
         const c=this.host.context();
         if(s.key!==this.key(c)||s.chat!==c.chat||s.metadata!==c.chatMetadata)throw tagError(Error('Чат изменился. Операция остановлена; вернитесь в исходный чат.'),{code:'MEM-001',stage:'chat',reason:'chat-changed'});
@@ -345,7 +346,7 @@ export class Engine {
         return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,diagnostic,placement:Number(settings.position),limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     async prepareContext(request,type='normal',{deferDelivery=false}={}) {
-        let s;try{s=this.session();}catch{return this.refreshMemory();}
+        const s=this.optionalSession();if(!s)return this.refreshMemory();
         if(!Array.isArray(request)||request===s.chat)throw tagError(Error('Для формирования контекста требуется отдельная копия сообщений.'),{code:'MEM-008',stage:'sources',reason:'separate-copy'});
         const memory=await this.refreshMemory();this.assert(s);
         if(memory.enabled&&!memory.blocked&&memory.placement!==-1&&!deferDelivery){
@@ -361,7 +362,7 @@ export class Engine {
         const epoch=++this.memoryEpoch;
         this.host.inject('');
         this.memoryTask=(async()=>{
-            let s;try{s=this.session();}catch{return {text:'',tokens:0,enabled:false,blocked:false,entries:[]};}
+            const s=this.optionalSession();if(!s)return {text:'',tokens:0,enabled:false,blocked:false,entries:[]};
             const stamp=()=>JSON.stringify([this.archive(s).revision,this.settings()]);
             let memory,before;
             do {before=stamp();memory=await this.memory();this.assert(s);if(epoch!==this.memoryEpoch)return this.memoryTask;}while(before!==stamp());

@@ -1,5 +1,5 @@
 import {guardAction,setErrorSink} from './diagnostics-view.js';
-import {describeError,tagError,trace} from './diagnostics.js';
+import {describeError,tagError,trace,errorMeta} from './diagnostics.js';
 import {VERSION as UI_VERSION} from './version.js';
 import {presetList,selectPreset,createPreset,renamePreset,deletePreset,restoreBuiltin,exportPreset,importPreset,mergePromptGroups} from './prompt-presets.js';
 import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint,hasDetachedSources} from './core.js';
@@ -18,7 +18,8 @@ const iconButton=(text,fn,glyph,primary=false)=>{const b=button('',fn,primary);b
 const row=(...nodes)=>{const r=el('div',{class:'pv-row'});r.append(...nodes);return r;};
 const field=(title,node)=>{const l=el('label',{},title);l.append(node);return l;};
 const download=(name,text,type='application/json')=>{const url=URL.createObjectURL(new Blob([text],{type}));const a=el('a',{href:url,download:name});a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-const readFile=accept=>new Promise(resolve=>{const input=el('input',{type:'file',accept});input.onchange=async()=>resolve(input.files?.[0]?{name:input.files[0].name,text:await input.files[0].text()}:null);input.oncancel=()=>resolve(null);input.click();});
+const readFile=accept=>new Promise((resolve,reject)=>{const input=el('input',{type:'file',accept});input.onchange=async()=>{try{resolve(input.files?.[0]?{name:input.files[0].name,text:await input.files[0].text()}:null);}catch(error){reject(error);}};input.oncancel=()=>resolve(null);input.click();});
+const fileTrace=(operation,fn)=>trace({code:operation.endsWith('export')?'DATA-008':'DATA-007',stage:operation.endsWith('export')?'export':'import',operation},fn);
 async function copy(text){try{await navigator.clipboard.writeText(text);}catch{const t=el('textarea',{},text);document.body.append(t);t.select();const success=document.execCommand('copy');t.remove();if(!success)throw Error('Браузер запретил копирование. Выделите текст и скопируйте вручную.');}}
 
 export class UI {
@@ -72,8 +73,8 @@ export class UI {
         const c=this.e.host.context();
         if(c.eventTypes.APP_READY)c.eventSource.on(c.eventTypes.APP_READY,guardAction(mountMenu,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}));
         c.eventSource.on(c.eventTypes.CHAT_CHANGED,guardAction(()=>{
-            this.e.host.inject('');if(this.e.busy)this.e.cancel('chat-changed');
-            this.generationView?.clear();
+            try{if(this.e.busy)this.e.cancel('chat-changed');}catch(error){this.issue(error,{code:'INT-004',stage:'unlock'});}finally{this.generationView?.clear();}
+            try{this.e.host.inject('');}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
             this.loadRange();this.chosen=[];this.chaptersChosen=[];this.arcOrderManual=false;this.volumeOrderManual=false;this.archiveSearch='';
             this.resumeDirty=true;
             this.panel.querySelector('.pv-chat-name').textContent=this.e.host.context().chatId?`Чат: ${this.e.host.context().chatId}`:'Общие настройки · чат не открыт';
@@ -197,8 +198,8 @@ export class UI {
     schedule(render=false) {const tab=this.tab,update=render||(this.panel?.open&&['archive','memory'].includes(tab));clearTimeout(this.timer);this.timer=setTimeout(()=>this.refresh(update&&this.tab===tab).catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'})),100);}
     issue(error,meta={}) {const record=this.e.host.report?.(error,{code:['TypeError','ReferenceError','RangeError','SyntaxError'].includes(error?.name)?'INT-001':'INT-002',stage:'handler',operation:'ui',severity:'error',...meta});const text=record?describeError(record).brief:error?.message??'Не удалось определить причину сбоя.';try{this.showNotice(text);}catch{}return text;}
     showNotice(text) {const n=this.panel.querySelector('.pv-notice');n.hidden=!text;n.textContent=text;}
-    async act(fn) {
-        try {const result=await fn();await this.refresh(true);return result;}
+    async act(fn,meta={}) {
+        try {const result=await trace(meta,fn);await this.refresh(true);return result;}
         catch(error){this.issue(error);await this.refresh(false).catch(()=>{});return null;}
     }
     open(tab=this.tab) {
@@ -261,7 +262,8 @@ export class UI {
         this.content.dataset.view=this.tab;
         this.panel.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-current',b.dataset.tab===this.tab?'page':'false'));
         this.content.replaceChildren(el('p',{class:'pv-muted'},'Загрузка архива…'));
-        let session;try{session=this.e.session();}catch{
+        let session;try{session=this.e.session();}catch(error){
+            if(errorMeta(error).reason!=='no-chat')this.issue(error,{code:'MEM-001',stage:'chat'});
             this.renderSession=null;
             this.lastMemory=null;this.viewState=null;this.sourceRanges=null;
             this.panel.querySelector('.pv-chat-name').textContent='Общие настройки · чат не открыт';this.content.replaceChildren();
@@ -271,6 +273,11 @@ export class UI {
             this.restoreView();return;
         }
         this.renderSession=session;
+        if(this.tab==='settings'){
+            this.content.replaceChildren();let archive=null;try{archive=this.e.archive(session);}catch(error){this.issue(error,{code:'MEM-002',stage:'active'});}
+            try{this.settingsView(archive);}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});if(!this.content.querySelector('.pv-diagnostics'))this.diagnosticsView?.settings(this.content);}
+            this.restoreView();return;
+        }
         const memory=snapshot??await this.e.refreshMemory();if(stamp!==this.renderId)return;this.e.assert(session);
         const archive=this.e.archive(session);this.lastMemory=memory;this.viewState=memoryViewState(archive.entries,memory,[...this.chosen,...this.chaptersChosen]);this.sourceRanges=this.e.orderEntries(archive.entries).ranges;
         if(this.rangeChatKey!==this.e.key())this.loadRange();else this.resolveRange();
@@ -476,7 +483,7 @@ export class UI {
         const text=el('textarea',{'aria-label':`Промпт ${LEVELS[type].genitive}`,spellcheck:'false'},draft?.base===preset.text?draft.text:preset.text);
         const editor=this.promptEditor={node:text,key,base:preset.text,displayBase:editorDisplay(preset.text)};
         select.onchange=async()=>{if(text.value!==editor.displayBase&&!await this.confirm('Несохранённый промпт','Отбросить изменения текущего промпта и открыть другой пресет?')){select.value=id;return;}text.value=preset.text;this.promptDrafts?.delete(key);selectPreset(settings,select.value);this.saveSettings();this.render();};
-        const controls=row(iconButton('Создать пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(name){createPreset(settings,name,()=>this.e.host.uuid());this.saveSettings();}}),'fa-plus'),iconButton('Импорт пресета',async()=>{try{const f=await readFile('.json,application/json');if(f)await this.act(()=>{importPreset(settings,f.text,()=>this.e.host.uuid());this.saveSettings();this.showNotice('Импортирован набор из трёх промптов.');});}catch(error){this.issue(error);}},'fa-file-import'),iconButton('Экспорт пресета',()=>download('pensieve-prompt-preset.json',JSON.stringify(exportPreset(settings),null,2)),'fa-file-export'));controls.classList.add('pv-preset-actions');
+        const controls=row(iconButton('Создать пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(name){createPreset(settings,name,()=>this.e.host.uuid());this.saveSettings();}}),'fa-plus'),iconButton('Импорт пресета',async()=>{try{const f=await readFile('.json,application/json');if(f)await this.act(()=>{importPreset(settings,f.text,()=>this.e.host.uuid());this.saveSettings();this.showNotice('Импортирован набор из трёх промптов.');},{code:'DATA-007',stage:'import',operation:'prompt-import'});}catch(error){this.issue(error,{code:'DATA-007',stage:'import',operation:'prompt-import'});}},'fa-file-import'),iconButton('Экспорт пресета',()=>fileTrace('prompt-export',()=>download('pensieve-prompt-preset.json',JSON.stringify(exportPreset(settings),null,2))),'fa-file-export'));controls.classList.add('pv-preset-actions');
         const toolbar=el('div',{class:'pv-preset-toolbar'});toolbar.append(field('Пресет',select),controls);this.content.append(toolbar);
         const segments=row(...Object.entries(LEVELS).map(([t,level])=>button(`Промпт ${level.genitive}`,()=>{this.promptTab=t;this.render();},this.promptTab===t)));segments.classList.add('pv-level-tabs');this.content.append(segments);
         text.classList.add('pv-prompt-text');
@@ -486,7 +493,7 @@ export class UI {
         const more=el('details',{class:'pv-preset-more'});more.append(el('summary',{},'Действия с пресетом'));
         const rename=button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){renamePreset(settings,id,name);this.saveSettings();}})),remove=button('Удалить пресет',()=>this.act(async()=>{if(await this.confirm('Удаление пресета','Удалить весь набор из трёх промптов?')){deletePreset(settings,id);text.value=editor.displayBase;for(const t of Object.keys(LEVELS))this.promptDrafts?.delete(JSON.stringify([t,id]));this.saveSettings();}}));rename.disabled=remove.disabled=id==='default';
         more.append(row(rename,remove,button('Восстановить «Основной»',()=>this.act(async()=>{if(await this.confirm('Встроенный пресет','Восстановить три исходных промпта «Основного»? Сохранённые изменения останутся в истории версий; другие пресеты сохранятся.')){restoreBuiltin(settings);for(const t of Object.keys(LEVELS))this.promptDrafts?.delete(JSON.stringify([t,'default']));if(id==='default'){text.value=settings.prompts[type].presets.find(p=>p.id==='default').text;editor.base=settings.prompts[type].presets.find(p=>p.id==='default').text;editor.displayBase=editorDisplay(editor.base);}this.saveSettings();}}))));
-        more.append(el('p',{class:'pv-muted'},'«Основной» нельзя удалить или переименовать. Для отдельного варианта создайте свой пресет.'),row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;this.showNotice('Текст загружен в текущий редактор. Нажмите «Сохранить промпт».');}}catch(error){this.issue(error);}}),button('Экспорт .txt',()=>download(`pensieve-prompt-${type}.txt`,text.value,'text/plain'))));this.content.append(more);
+        more.append(el('p',{class:'pv-muted'},'«Основной» нельзя удалить или переименовать. Для отдельного варианта создайте свой пресет.'),row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;this.showNotice('Текст загружен в текущий редактор. Нажмите «Сохранить промпт».');}}catch(error){this.issue(error,{code:'DATA-007',stage:'import',operation:'prompt-import'});}}),button('Экспорт .txt',()=>fileTrace('prompt-export',()=>download(`pensieve-prompt-${type}.txt`,text.value,'text/plain')))));this.content.append(more);
     }
 
     expandPrompt(text) {
@@ -524,14 +531,14 @@ export class UI {
         const theme=el('select');theme.append(el('option',{value:'dark'},'Полуночный синий'),el('option',{value:'light'},'Светлый пергамент'));theme.value=settings.theme;theme.onchange=()=>{settings.theme=theme.value;this.panel.dataset.theme=theme.value;this.saveSettings();};appearance.append(field('Тема панели',theme));
         archiveGroup.append(el('p',{class:'pv-muted'},'Резервное копирование'));
         if(archive){const complete=el('section',{class:'pv-complete-backup'});complete.append(el('h4',{},'Резервная копия памяти'),el('p',{class:'pv-muted'},'Один JSON: все главы, части, тома, их связи, промпты и настройки. Копия восстанавливает память, а не удалённую переписку.'),row(iconButton('Экспортировать всё',()=>this.act(()=>this.exportFullBackup()),'fa-download',true),iconButton('Восстановить из копии',()=>this.readFullBackup(),'fa-upload')));archiveGroup.append(complete,el('p',{class:'pv-muted'},`Архив текущего чата: ${(bytes(archive)/1024).toFixed(1)} KiB. Резервная копия содержит личные тексты — храните её у себя.`));
-        archiveGroup.append(row(button('Экспорт архива JSON',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2))),button('Импорт архива JSON',()=>this.readFullBackup())));
+        archiveGroup.append(row(button('Экспорт архива JSON',()=>fileTrace('backup-export',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2)))),button('Импорт архива JSON',()=>this.readFullBackup())));
         }else archiveGroup.append(el('p',{class:'pv-muted'},'Откройте сохранённый чат для экспорта, импорта и восстановления его архива. Общие настройки и промпты доступны без чата.'));
-        archiveGroup.append(row(button('Экспорт промптов JSON',()=>download('pensieve-prompts.json',JSON.stringify({format:'pensieve-prompts',version:1,prompts:settings.prompts},null,2))),button('Импорт промптов JSON',()=>this.act(async()=>{
+        archiveGroup.append(row(button('Экспорт промптов JSON',()=>fileTrace('prompt-export',()=>download('pensieve-prompts.json',JSON.stringify({format:'pensieve-prompts',version:1,prompts:settings.prompts},null,2)))),button('Импорт промптов JSON',()=>this.act(async()=>{
             const f=await readFile('.json');if(!f)return;const data=JSON.parse(f.text);if(data.format!=='pensieve-prompts'||data.version!==1)throw Error('Неверный формат файла промптов.');
             const result=clone(settings.prompts);
             for(const type of ['summary','arc','volume']){const g=data.prompts?.[type];if(type==='volume'&&!g)continue;if(!g||!Array.isArray(g.presets)||!g.presets.length||g.presets.length>100)throw Error('Неверный список пресетов.');const ids=new Set();result[type].presets=g.presets.map(p=>{if(typeof p.id!=='string'||!p.id||ids.has(p.id)||typeof p.name!=='string'||!p.name.trim()||typeof p.text!=='string')throw Error('Неверные поля пресета.');ids.add(p.id);return{id:p.id,name:p.name,text:p.text,history:Array.isArray(p.history)?p.history.filter(h=>typeof h==='string'):[]};});result[type].selected=ids.has(g.selected)?g.selected:result[type].presets[0].id;}
             if(await this.confirm('Импорт промптов','Добавить наборы пресетов из файла? Существующие варианты сохранятся; точные совпадения объединятся. Если промпта тома в старой копии нет, текущий промпт тома сохранится.')){settings.prompts=mergePromptGroups(settings.prompts,result);this.saveSettings();}
-        }))));
+        },{code:'DATA-007',stage:'import',operation:'prompt-import'}))));
         if(!archive){this.diagnosticsView?.settings(this.content);return;}
         const recovery=el('details',{class:'pv-recovery'});recovery.append(el('summary',{},'Восстановление'));archiveGroup.append(recovery);
         if(archive.pending?.type==='backup')recovery.append(el('p',{class:'pv-muted'},'Завершение повторно проверит целую копию и выбранные промпты/настройки. «Оставить копию в архиве без активности» сохранит её тексты, отключит все записи и вернёт выбранные общие разделы в состояние до восстановления. Прежний архив после подтверждённой замены это действие не возвращает.'));
@@ -551,7 +558,7 @@ export class UI {
         download(`Omut_Pamyati_${stamp}.json`,JSON.stringify(file,null,2));
     }
     async readFullBackup() {
-        return this.act(async()=>{const session=this.e.session(),file=await readFile('.json,application/json');if(!file)return;this.e.assert(session);this.restoreBackupDialog(parseBackup(file.text),session);});
+        return this.act(async()=>{const session=this.e.session(),file=await readFile('.json,application/json');if(!file)return;this.e.assert(session);this.restoreBackupDialog(parseBackup(file.text),session);},{code:'DATA-007',stage:'import',operation:'backup-import'});
     }
     restoreBackupDialog(file,session) {
         this.e.assert(session);const {dialog,body}=this.makeDialog('Восстановление памяти',true);dialog.classList.add('pv-backup-dialog');

@@ -20,7 +20,7 @@ export function boot(){
             try{
                 if(!echo){const memory=await engine.refreshMemory();if(!memory.enabled||!memory.text&&!memory.blocked)return;throw tagError(Error('Макрос памяти не зарегистрирован.'),{code:'MEM-011',stage:'registration',operation:'context'});}
                 await echo.prepare(request,type);
-            }catch(error){abort(true);if(echo)echo.fail(error);else{diagnostics.report(error,{operation:'context',status:'blocked'});try{context().stopGeneration();}catch(failure){diagnostics.report(failure,{code:'INT-004',stage:'unlock',notify:false});}}}
+            }catch(error){abort(true);if(echo)await echo.fail(error);else{diagnostics.report(error,{operation:'context',status:'blocked'});try{context().stopGeneration();}catch(failure){diagnostics.report(failure,{code:'INT-004',stage:'unlock',notify:false});}}}
         };
         const ui=new UI(engine);ui.diagnosticsView=view;
         try{echo=await trace({code:'MEM-011',stage:'registration',operation:'startup'},()=>installMemoryEcho(engine,{onError:(_error,record)=>{if(record)ui.showNotice(describeError(record).brief);}}));}

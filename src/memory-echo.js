@@ -1,4 +1,4 @@
-import {trace,tagError} from './diagnostics.js';
+import {trace,tagError,errorMeta} from './diagnostics.js';
 import {KEY} from './core.js';
 import {MEMORY_ECHO,automaticMemory} from './placement.js';
 import {memorySources} from './source-links.js';
@@ -20,7 +20,7 @@ function alignHistory(values,records,match){
 
 /** Native assembly stays unmodified; temporary envelopes exist only inside the final resolver. */
 export class MemoryEcho {
-    constructor(engine,{onError=()=>{}}={}){this.engine=engine;this.host=engine.host;this.jobs=[];this.onError=onError;}
+    constructor(engine,{onError=()=>{}}={}){this.engine=engine;this.host=engine.host;this.jobs=[];this.guardErrors=new WeakMap();this.onError=onError;}
     get job(){return this.jobs.at(-1);}
     stamp(s){return JSON.stringify([s?this.engine.archive(s).revision:null,this.engine.settings()]);}
     assert(job){
@@ -38,7 +38,7 @@ export class MemoryEcho {
         listen(t.GENERATE_AFTER_COMBINE_PROMPTS,async data=>{
             if(data.dryRun||this.engine.busy||!hasEcho(data.prompt))return;
             const job=this.job,normal=job&&!job.finalized&&job.tcHistory&&data.prompt.includes(job.tcHistory);
-            try{if(normal){await this.finalize(data,false,job);job.tcPrepared=true;}else await this.finalizeRaw(data);}catch(error){this.fail(error,normal?job:null,data);}
+            try{if(normal){await this.finalize(data,false,job);job.tcPrepared=true;}else await this.finalizeRaw(data);}catch(error){return this.fail(error,normal?job:null,data);}
         });
         listen(t.GENERATE_AFTER_DATA,async(data,dryRun)=>{
             const job=this.job;
@@ -48,12 +48,12 @@ export class MemoryEcho {
                 if(job.tcPrepared){this.assert(job);await this.resolveLate(data,job);}
                 else await this.finalize(data,false,job);
                 this.tagPacket(data,job);
-            }catch(error){this.fail(error,job,data);}
+            }catch(error){return this.fail(error,job,data);}
         });
         listen(t.CHAT_COMPLETION_SETTINGS_READY,async data=>{
             if(data.messages?.some(m=>m[LITERAL_PROMPT]))return;
-            const job=data.messages?.find(m=>m[REQUEST])?.[REQUEST];
-            try{if(job?.failed){this.blockPacket(data);return;}if(job){this.assert(job);await this.resolveLate(data,job);}else await this.finalizeRaw(data);}catch(error){this.fail(error,job,data);}finally{this.releasePacket(job,data);}
+            const job=data.messages?.find(m=>m[REQUEST])?.[REQUEST]??(this.job?.failed?this.job:null);
+            try{if(job?.failed){this.blockPacket(data);return;}if(job){this.assert(job);await this.resolveLate(data,job);}else await this.finalizeRaw(data);}catch(error){return this.fail(error,job,data);}finally{this.releasePacket(job,data);}
         });
         listen(t.GENERATION_ENDED,()=>this.end());
         listen(t.GENERATION_STOPPED,()=>{if(this.job)this.job.invalidated=true;});
@@ -63,7 +63,7 @@ export class MemoryEcho {
     // The supported final prompt boundaries expand it, once per outgoing request.
     macro(){return '{{memory_echo}}';}
     async start(type='normal'){
-        let session=null;try{session=this.engine.session();}catch{}
+        const session=this.engine.optionalSession();
         const job={type,session,automatic:Number(this.engine.settings().position)!==-1,finalized:false,sources:[],frames:[]};
         job.stamp=this.stamp(session);this.jobs.push(job);
         try{job.memory=await this.engine.refreshMemory();this.assert(job);}
@@ -152,24 +152,24 @@ export class MemoryEcho {
     }
     async finalizeRaw(data){
         const key=promptKey(data);if(!hasEcho(textOf(data[key]??'')+textOf([data.assistant_prefill??'',data.negative_prompt??''])))return;
-        let session=null;try{session=this.engine.session();}catch{}
+        const session=this.engine.optionalSession();
         const job={session,automatic:false,sources:[],frames:[],stamp:this.stamp(session)};
         job.memory=session?await this.engine.memory(session):{enabled:false,text:'',sourceIds:new Set()};
         return this.resolve(data,job,{automatic:false});
     }
-    fail(error,job=this.job,data=null){
-        if(job){job.finalized=true;job.failed=true;}
+    async fail(error,job=this.job,data=null){
+        error=this.guardErrors.get(error)??error;if(job){job.finalized=true;job.failed=true;job.failure=error;}
         const record=this.host.report?.(error,{operation:'context',status:'blocked',snapshot:{macroUsed:job?.usedMacro??null,generation:'running'}});
         // Native EventEmitter swallows errors. Serialization also fails closed if Stop itself fails.
-        this.tagPacket(data,job);this.blockPacket(data);
-        try{this.host.context().stopGeneration?.();}catch(failure){this.host.report?.(tagError(failure,{code:'INT-004',stage:'unlock',reason:'release'}),{operation:'context',notify:false});try{this.host.emergencyUnlock?.();}catch{}}
+        try{this.tagPacket(data,job);}catch{}this.blockPacket(data,error);
+        try{this.host.context().stopGeneration?.();}catch(failure){this.host.report?.(tagError(failure,{code:'INT-004',stage:'unlock',reason:'release'}),{operation:'context',notify:false});try{const c=this.host.context();await c.eventSource.emit(c.eventTypes.GENERATION_STOPPED);}catch{}try{this.host.emergencyUnlock?.();}catch{}}
         try{this.host.inject('');}catch(failure){this.host.report?.(failure,{code:'MEM-007',stage:'injection',operation:'context',notify:false});}
         try{this.onError(error,record);}catch(failure){this.host.report?.(failure,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning',notify:false});}
     }
 
-    tagPacket(data,job){if(!job||this.host.context().mainApi!=='openai'||!Array.isArray(data?.prompt))return;data.prompt=data.prompt.filter(m=>m&&typeof m==='object').map(m=>({...m,[REQUEST]:job}));if(!data.prompt.length&&job.failed)data.prompt=[{role:'system',content:'',[REQUEST]:job}];job.packet=data.prompt;}
-    releasePacket(job,data){for(const list of [job?.packet,data?.messages])for(const m of list??[])if(m&&typeof m==='object')delete m[REQUEST];if(job)job.packet=null;}
-    blockPacket(data){if(data&&typeof data==='object')try{Object.defineProperty(data,'toJSON',{configurable:true,value(){throw Error('Омут памяти остановил передачу некорректного контекста.');}});}catch{}}
+    tagPacket(data,job){if(!job||this.host.context().mainApi!=='openai'||!Array.isArray(data?.prompt))return;const list=data.prompt;for(let i=0;i<list.length;i++){const m=list[i];if(!m||typeof m!=='object')continue;try{m[REQUEST]=job;}catch{try{list[i]={...m,[REQUEST]:job};}catch{}}}job.packet=list;}
+    releasePacket(job,data){for(const list of [job?.packet,data?.messages])for(const m of list??[])if(m&&typeof m==='object')try{delete m[REQUEST];}catch{}if(job)job.packet=null;}
+    blockPacket(data,error=this.job?.failure){if(!data||typeof data!=='object')return;const guard=tagError(Error('Омут памяти остановил передачу некорректного контекста.'),errorMeta(error));if(error&&typeof error==='object')this.guardErrors.set(guard,error);const stop=()=>{throw guard;};try{Object.defineProperty(data,'toJSON',{configurable:true,value:stop});}catch{}const key=promptKey(data);if(typeof data[key]==='string')try{data[key]={toJSON:stop,toString:stop,[Symbol.toPrimitive]:stop};}catch{}else if(Array.isArray(data[key])){try{Object.defineProperty(data[key],'toJSON',{configurable:true,value:stop});}catch{}for(const message of data[key])if(message&&typeof message==='object')try{Object.defineProperty(message,'toJSON',{configurable:true,enumerable:true,value:stop});}catch{}}}
     end(){this.releasePacket(this.job);this.jobs.pop();const memory=this.engine.peekMemory();this.host.inject(usable(memory)?memory.text:'');}
 }
 

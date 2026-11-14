@@ -41,7 +41,7 @@ export class GenerationView {
         const running=job.status==='running',saving=job.status==='saving',error=job.status==='error';
         job.dialog.dataset.generationState=job.status;job.progress.hidden=!running&&!saving;job.error.hidden=!error;job.error.textContent=job.errorMessage??'';
         job.message.textContent=saving?'Результат получен. Проверяется сохранение на сервере…':'Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.';
-        job.retry.hidden=!error;job.retry.disabled=!error;job.retry.textContent=job.phase==='save'?'Повторить сохранение':'Повторить запрос';job.cancel.textContent=error?'Закрыть':'Отменить генерацию';job.cancel.disabled=saving;job.close.disabled=saving;
+        job.retry.hidden=!error;job.retry.disabled=!error;job.retry.textContent=job.phase==='save'?'Повторить сохранение':job.phase==='preview'?'Показать результат повторно':'Повторить запрос';job.cancel.textContent=error?'Закрыть':'Отменить генерацию';job.cancel.disabled=saving;job.close.disabled=saving;
         const label=labels[job.type];const title=job.status==='ready'?label.ready:error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Омут памяти — сохраняется глава':'Омут памяти — создаётся '+label.making;
         this.dock.replaceChildren(button(title,()=>this.restore(job)));this.dock.hidden=!job.windowHidden;
     }
@@ -77,35 +77,36 @@ export class GenerationView {
         if(recovered.pending||!matches(entry))throw Error('Не удалось подтвердить завершение сохранения. Откройте восстановление в настройках.');
         return entry;
     }
+    paint(job) {try{this.update(job);}catch(error){this.engine.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
     async run(job) {
         if(!this.current(job)||!['new','error'].includes(job.status))return null;
-        job.status=job.phase==='save'?'saving':'running';job.errorMessage='';this.update(job);
+        job.status=job.phase==='save'?'saving':'running';job.errorMessage='';this.paint(job);
         try {
             this.assert(job);
-            if(job.phase!=='save')job.draft=await job.fn();
+            if(job.phase==='generate')job.draft=await job.fn();
             if(!this.current(job))return null;
             this.assert(job);const draft=job.draft;job.type=draft.type;
             if(job.phase==='save'||draft.type==='summary'&&!this.engine.settings().previewEpisodes){
-                job.phase='save';job.status='saving';this.update(job);
+                job.phase='save';job.status='saving';this.paint(job);
                 await this.save(job);
                 if(!this.current(job))return null;
-                await this.onSaved(draft);this.clear(job);
+                try{await this.onSaved(draft);}catch(error){this.engine.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}this.clear(job);
             }else{
-                job.phase='preview';job.status='ready';this.update(job);
+                job.phase='preview';job.status='ready';this.paint(job);
                 if(!job.minimized)this.showPreview(job);
             }
             return draft;
         }catch(error){
             if(!this.current(job))return null;
-            const record=this.engine.host.report?.(error,{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);this.update(job);throw error;
+            const presentation=job.phase==='preview',record=this.engine.host.report?.(error,presentation?{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}:{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);this.paint(job);if(presentation){try{if(!job.minimized&&!job.dialog?.open)job.dialog?.showModal();}catch{}return job.draft;}throw error;
         }
     }
     showPreview(job) {
         if(!this.current(job)||job.status!=='ready')return;
         try{this.assert(job);}catch(error){const record=this.engine.host.report?.(error,{operation:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error.message;this.restore(job);return;}
         job.status='preview';job.minimized=false;job.windowHidden=false;this.dock.hidden=true;
-        if(job.dialog.open)job.dialog.close();job.dialog.remove();
-        const {done,dialog}=this.preview(job.draft);job.previewDialog=dialog;
+        if(job.dialog.open)job.dialog.close();
+        const {done,dialog}=this.preview(job.draft);job.previewDialog=dialog;job.dialog.remove();
         Promise.resolve(done).then(()=>this.clear(job),error=>{this.engine.host?.notify?.('error',error);this.clear(job);});
     }
 }

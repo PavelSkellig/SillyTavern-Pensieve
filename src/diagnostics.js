@@ -40,7 +40,7 @@ function classify(error,meta){
     const name=read(error,'name'),kind=classes.has(name)?name:'Error',raw=typeof read(error,'message')==='string'?read(error,'message').slice(0,2048):'';
     let code=enumValue(ERRORS,meta.code,kind==='Error'?'INT-005':'INT-001'),reason=enumValue(REASONS,meta.reason,'unknown');
     const stage=enumValue(STAGES,meta.stage,ERRORS[code].stage),api=stage==='api';
-    const rawCode=read(read(error,'error'),'code')??read(error,'code')??read(read(error,'error'),'type'),apiCode=api&&apiCodes.has(rawCode)?rawCode:null;
+    const rawCode=read(read(error,'error'),'code')??read(error,'code')??read(read(error,'error'),'type')??(apiCodes.has(raw)?raw:null),apiCode=api&&apiCodes.has(rawCode)?rawCode:null;
     let http=read(error,'status')??read(read(error,'response'),'status');if(!Number.isInteger(http)||http<100||http>599)http=api?Number(raw.match(/^Got response status (\d{3})$/)?.[1])||null:null;
     if(api){
         if(['context_length_exceeded','max_tokens_exceeded','token_limit_exceeded'].includes(apiCode)){code='GEN-002';reason='api-context';}
@@ -71,13 +71,13 @@ export class Diagnostics {
         Object.assign(this,{storage,getScope,getSnapshot,stVersion,now,logger});this.persistent=!!storage;this.listeners=new Set();this.seen=new WeakMap();this.records=[];this.serial=0;this.key=null;this.load();
     }
     scopeKey(){let scope='local';try{const value=this.getScope();if(typeof value==='string')scope=value.slice(0,2000);}catch{}return 'pensieve.diagnostics.v1:'+fingerprint({name:'scope',mes:scope});}
-    load(){
-        const key=this.scopeKey();if(key===this.key)return;this.key=key;this.records=[];
+    load(fresh=false){
+        const key=this.scopeKey();if(key===this.key&&(!fresh||!this.persistent))return;this.key=key;this.records=[];
         if(!this.persistent)return;
-        try{const raw=this.storage.getItem(key);if(!raw)return;if(raw.length>128*1024){this.corrupt=true;return;}const value=JSON.parse(raw);if(value.version!==1||!Array.isArray(value.entries)){this.corrupt=true;return;}this.records=value.entries.slice(-20).map(validEntry).filter(Boolean);}catch{this.persistent=false;}
+        let raw;try{raw=this.storage.getItem(key);}catch{this.persistent=false;return;}if(!raw)return;try{if(raw.length>128*1024)throw Error();const value=JSON.parse(raw);if(value.version!==1||!Array.isArray(value.entries))throw Error();this.records=value.entries.slice(-20).map(validEntry).filter(Boolean);this.corrupt=false;}catch{this.corrupt=true;}
     }
     persist(){if(!this.persistent)return;try{this.storage.setItem(this.key,JSON.stringify({version:1,entries:this.records}));}catch{this.persistent=false;}}
-    get entries(){this.load();return structuredClone(this.records);}
+    get entries(){this.load(true);return structuredClone(this.records);}
     subscribe(listener){this.listeners.add(listener);return()=>this.listeners.delete(listener);}
     emit(entry,notify){
         if(this.emitting)return;this.emitting=true;
@@ -85,7 +85,7 @@ export class Diagnostics {
     }
     report(error,meta={}){
         try{
-            this.load();error=objectError(error);const seen=this.seen.get(error);
+            this.load(true);error=objectError(error);const seen=this.seen.get(error);
             const info=classify(error,{...meta,...(tags.get(error)??{})});let snapshot={};try{snapshot=safeSnapshot({...this.getSnapshot(),...(meta.snapshot??{}),...((tags.get(error)??{}).snapshot??{})});}catch{}
             const time=this.now(),entry=validEntry({...info,...snapshot,id:`${time}-${++this.serial}`,time,lastTime:time,repeats:1,version:VERSION,stVersion:typeof this.stVersion==='function'?this.stVersion():this.stVersion});
             if(!entry)return null;
@@ -100,7 +100,7 @@ export class Diagnostics {
         }catch{return null;}
     }
     reportText(entries=this.entries){return formatDiagnosticReport(entries);}
-    clear(){this.load();this.records=[];this.persist();this.emit(null,false);}
+    clear(){this.load(true);this.records=[];this.persist();this.emit(null,false);}
 }
 
 export function diagnosticSnapshot(context,engine=null,core={}) {
