@@ -45,12 +45,12 @@ function classify(error,meta){
     if(api){
         if(['context_length_exceeded','max_tokens_exceeded','token_limit_exceeded'].includes(apiCode)){code='GEN-002';reason='api-context';}
         else if(kind==='TimeoutError'||['request_timeout','timeout'].includes(apiCode)||[408,504].includes(http)){code='GEN-003';reason='api-timeout';}
-        else if(kind==='AbortError'||raw==='Cancelled by stop event'||raw==='Clicked stop button'){code='GEN-006';if(reason!=='cancel-user')reason='cancel-unknown';}
+        else if(kind==='AbortError'||raw==='Cancelled by stop event'||raw==='Clicked stop button'){code='GEN-006';if(!['cancel-user','chat-changed'].includes(reason))reason='cancel-unknown';}
         else if(['invalid_api_key','authentication_error'].includes(apiCode)||http===401||http===403)reason='api-auth';
         else if(['insufficient_quota','rate_limit_exceeded','rate_limit_error'].includes(apiCode)||http===429)reason='api-rate';
         else if(raw==='Failed to fetch'||raw==='NetworkError when attempting to fetch resource.')reason='network';
     }
-    return {code,reason,stage,kind,http,apiCode,messageId:knownMessages.get(raw)??null,operation:enumValue(OPERATIONS,meta.operation,'unknown'),severity:severities.has(meta.severity)?meta.severity:code==='GEN-006'?'info':code==='UI-001'?'warning':'error',status:statuses.has(meta.status)?meta.status:code==='GEN-006'?'canceled':code==='UI-001'?'warning':'error',frames:safeFrames(read(error,'stack'))};
+    return {code,reason,stage,kind,http,apiCode,messageId:knownMessages.get(raw)??null,operation:enumValue(OPERATIONS,meta.operation,'unknown'),severity:severities.has(meta.severity)?meta.severity:code==='GEN-006'?'info':code==='UI-001'?'warning':'error',status:statuses.has(meta.status)?meta.status:code==='GEN-006'?'canceled':meta.severity==='warning'||code==='UI-001'?'warning':'error',frames:safeFrames(read(error,'stack'))};
 }
 function validEntry(value){
     if(!value||!Object.hasOwn(ERRORS,value.code)||!Number.isFinite(value.time)||value.time<0||value.time>9e12)return null;

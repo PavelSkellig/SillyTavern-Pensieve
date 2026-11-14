@@ -1,4 +1,4 @@
-import {trace,tagError} from './diagnostics.js';
+import {trace,tagError,errorMeta} from './diagnostics.js';
 import {normalisePromptPresets,mergePromptGroups} from './prompt-presets.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
 import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
@@ -34,10 +34,10 @@ export class Engine {
     archive(s=this.session()) {return s.metadata[KEY]??emptyArchive(s.key);}
     async run(fn) {
         if(this.busy)throw tagError(Error('Другая операция уже выполняется. Дождитесь её завершения.'),{code:'INT-003',stage:'handler',reason:'busy'});
-        this.busy=true;this.cancelled=false;this.diagnosticState='running';
+        this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';
         try{return await fn();}catch(error){throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.busy=false;this.cancelled=false;this.diagnosticState='idle';try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
     }
-    cancel() {this.cancelled=true;this.host.cancel?.();}
+    cancel(reason='cancel-user') {this.cancelled=true;this.cancelReason=reason==='chat-changed'?'chat-changed':'cancel-user';this.host.cancel?.(this.cancelReason);}
     prompt(type) {
         const settings=this.settings(),p=settings.prompts[type],preset=p.presets.find(x=>x.id===settings.prompts.summary.selected);
         if(!preset?.text.trim())throw tagError(Error(`Сначала сохраните свой промпт ${LEVELS[type].genitive} в разделе «Промпты».`),{code:'DATA-006',stage:'validation',reason:'missing-prompt'});
@@ -63,14 +63,14 @@ export class Engine {
         const preset=this.prompt(draft.type),limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits());
         const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>this.host.count(`${preset.text}\n\n${source}`));
         this.assert(s);
-        if(this.cancelled)throw tagError(Error('Генерация отменена до отправки запроса.'),{code:'GEN-006',stage:'api',reason:'cancel-user'});
+        if(this.cancelled)throw tagError(Error('Генерация отменена до отправки запроса.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
         if(!Number.isFinite(tokens)||!Number.isFinite(limits.context)||!Number.isFinite(limits.output))throw tagError(Error('Не удалось проверить лимит контекста модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
         if(tokens+limits.output+256>limits.context)throw tagError(Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число записей либо увеличьте контекст в SillyTavern. Ничего не обрезано.`),{code:'MEM-005',stage:'tokens',reason:'context-local'});
         const unlock=this.host.lock?.();
         try {
             const text=await trace({code:'GEN-001',stage:'api',operation:'generate-'+draft.type,snapshot:{macroUsed:false,generation:'running'}},()=>this.host.generate(preset.text,source));
             this.assert(s);
-            if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:'cancel-user'});
+            if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
             if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
             if(typeof text!=='string')throw tagError(Error('Модель вернула некорректный формат ответа. Исходные сообщения не изменены.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
             if(!text.trim())throw tagError(Error('Модель вернула пустой ответ. Исходные сообщения не изменены.'),{code:'GEN-004',stage:'response',reason:'empty'});
@@ -327,7 +327,7 @@ export class Engine {
                 }
                 let rollback=false;try{this.assert(s);await trace({stage:'save'},()=>this.host.save());this.assert(s);const disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);rollback=JSON.stringify(disk.metadata?.[KEY])===JSON.stringify(previousArchive);}catch{}
                 this.restoring=false;try{this.assert(s);await this.refreshMemory();}catch{}
-                throw Error(error.message+(rollback&&globalsRollback?' Предыдущее состояние восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив и настройки после подключения. Незавершённая копия не внедряется до проверки.'));
+                throw tagError(Error(error.message+(rollback&&globalsRollback?' Предыдущее состояние восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив и настройки после подключения. Незавершённая копия не внедряется до проверки.'),{cause:error}),errorMeta(error));
             }
         });
     }

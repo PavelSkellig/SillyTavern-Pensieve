@@ -32,30 +32,32 @@ export class MemoryEcho {
     attach(registerMacro){
         if(this.attached)return;this.attached=true;trace({code:'MEM-011',stage:'registration',operation:'startup'},()=>registerMacro(()=>this.macro()));
         const {eventSource:events,eventTypes:t}=this.host.context();
-        events.on(t.GENERATE_BEFORE_COMBINE_PROMPTS,data=>this.captureFrames(data));
-        events.on(t.GENERATE_AFTER_COMBINE_PROMPTS,async data=>{
+        const critical=new Set([t.GENERATE_BEFORE_COMBINE_PROMPTS,t.GENERATE_AFTER_COMBINE_PROMPTS,t.GENERATE_AFTER_DATA,t.CHAT_COMPLETION_SETTINGS_READY]);
+        const listen=(event,handler)=>events.on(event,(...args)=>{const failed=error=>critical.has(event)?this.fail(tagError(error,{code:'MEM-009',stage:'handoff'}),this.job,args[0]):this.host.report?.(error,{code:'INT-002',stage:'handler',operation:'context',severity:'warning'});try{const result=handler(...args);return result&&typeof result.then==='function'?Promise.resolve(result).catch(failed):result;}catch(error){return failed(error);}});
+        listen(t.GENERATE_BEFORE_COMBINE_PROMPTS,data=>this.captureFrames(data));
+        listen(t.GENERATE_AFTER_COMBINE_PROMPTS,async data=>{
             if(data.dryRun||this.engine.busy||!hasEcho(data.prompt))return;
             const job=this.job,normal=job&&!job.finalized&&job.tcHistory&&data.prompt.includes(job.tcHistory);
             try{if(normal){await this.finalize(data,false,job);job.tcPrepared=true;}else await this.finalizeRaw(data);}catch(error){this.fail(error,normal?job:null,data);}
         });
-        events.on(t.GENERATE_AFTER_DATA,async(data,dryRun)=>{
+        listen(t.GENERATE_AFTER_DATA,async(data,dryRun)=>{
             const job=this.job;
             try{
                 if(dryRun){await this.finalizeRaw(data);return;}
-                if(!job||job.invalidated)return;
+                if(!job)return;if(job.failed){this.tagPacket(data,job);this.blockPacket(data);return;}if(job.invalidated)return;
                 if(job.tcPrepared){this.assert(job);await this.resolveLate(data,job);}
                 else await this.finalize(data,false,job);
-                if(this.host.context().mainApi==='openai')for(const m of data.prompt??[])m[REQUEST]=job;
+                this.tagPacket(data,job);
             }catch(error){this.fail(error,job,data);}
         });
-        events.on(t.CHAT_COMPLETION_SETTINGS_READY,async data=>{
+        listen(t.CHAT_COMPLETION_SETTINGS_READY,async data=>{
             if(data.messages?.some(m=>m[LITERAL_PROMPT]))return;
             const job=data.messages?.find(m=>m[REQUEST])?.[REQUEST];
-            try{if(job){this.assert(job);await this.resolveLate(data,job);}else await this.finalizeRaw(data);}catch(error){this.fail(error,job,data);}
+            try{if(job?.failed){this.blockPacket(data);return;}if(job){this.assert(job);await this.resolveLate(data,job);}else await this.finalizeRaw(data);}catch(error){this.fail(error,job,data);}finally{this.releasePacket(job,data);}
         });
-        events.on(t.GENERATION_ENDED,()=>this.end());
-        events.on(t.GENERATION_STOPPED,()=>{if(this.job)this.job.invalidated=true;});
-        events.on(t.CHAT_CHANGED,()=>{for(const j of this.jobs)j.invalidated=true;this.jobs=[];this.host.inject('');});
+        listen(t.GENERATION_ENDED,()=>this.end());
+        listen(t.GENERATION_STOPPED,()=>{if(this.job)this.job.invalidated=true;});
+        listen(t.CHAT_CHANGED,()=>{for(const j of this.jobs)j.invalidated=true;this.jobs=[];this.host.inject('');});
     }
     // ST substitutes the live greeting even for Prompt Manager dry runs. Keep it literal.
     // The supported final prompt boundaries expand it, once per outgoing request.
@@ -156,16 +158,19 @@ export class MemoryEcho {
         return this.resolve(data,job,{automatic:false});
     }
     fail(error,job=this.job,data=null){
-        if(job)job.finalized=true;
+        if(job){job.finalized=true;job.failed=true;}
         const record=this.host.report?.(error,{operation:'context',status:'blocked',snapshot:{macroUsed:job?.usedMacro??null,generation:'running'}});
         // Native EventEmitter swallows errors. Serialization also fails closed if Stop itself fails.
-        if(data&&typeof data==='object')try{Object.defineProperty(data,'toJSON',{configurable:true,value(){throw Error('Омут памяти остановил передачу некорректного контекста.');}});}catch{}
+        this.tagPacket(data,job);this.blockPacket(data);
         try{this.host.context().stopGeneration?.();}catch(failure){this.host.report?.(tagError(failure,{code:'INT-004',stage:'unlock',reason:'release'}),{operation:'context',notify:false});try{this.host.emergencyUnlock?.();}catch{}}
         try{this.host.inject('');}catch(failure){this.host.report?.(failure,{code:'MEM-007',stage:'injection',operation:'context',notify:false});}
         try{this.onError(error,record);}catch(failure){this.host.report?.(failure,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning',notify:false});}
     }
 
-    end(){this.jobs.pop();const memory=this.engine.peekMemory();this.host.inject(usable(memory)?memory.text:'');}
+    tagPacket(data,job){if(!job||this.host.context().mainApi!=='openai'||!Array.isArray(data?.prompt))return;data.prompt=data.prompt.filter(m=>m&&typeof m==='object').map(m=>({...m,[REQUEST]:job}));if(!data.prompt.length&&job.failed)data.prompt=[{role:'system',content:'',[REQUEST]:job}];job.packet=data.prompt;}
+    releasePacket(job,data){for(const list of [job?.packet,data?.messages])for(const m of list??[])if(m&&typeof m==='object')delete m[REQUEST];if(job)job.packet=null;}
+    blockPacket(data){if(data&&typeof data==='object')try{Object.defineProperty(data,'toJSON',{configurable:true,value(){throw Error('Омут памяти остановил передачу некорректного контекста.');}});}catch{}}
+    end(){this.releasePacket(this.job);this.jobs.pop();const memory=this.engine.peekMemory();this.host.inject(usable(memory)?memory.text:'');}
 }
 
 export async function installMemoryEcho(engine,options) {

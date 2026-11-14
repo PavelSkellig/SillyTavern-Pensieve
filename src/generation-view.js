@@ -1,8 +1,10 @@
+import {guardAction} from './diagnostics-view.js';
+import {tagError,describeError} from './diagnostics.js';
 import {LEVELS} from './hierarchy.js';
 
 const labels={summary:{making:'глава',ready:'Глава готова'},arc:{making:'часть',ready:'Часть готова'},volume:{making:'том',ready:'Том готов'}};
 const node=(tag,className='',text='')=>{const n=document.createElement(tag);n.className=className;n.textContent=text;return n;};
-const button=(text,action)=>{const n=node('button','',text);n.type='button';n.addEventListener('click',action);return n;};
+const button=(text,action)=>{const n=node('button','',text);n.type='button';n.addEventListener('click',guardAction(action,{stage:'handler',operation:'ui',severity:'warning'}));return n;};
 
 /** Presentation of one existing engine operation. Hiding never owns request cancellation. */
 export class GenerationView {
@@ -14,8 +16,7 @@ export class GenerationView {
         if(this.job||this.engine.busy)throw Error('Другая операция или её результат ещё открыты. Вернитесь к индикатору «Омут памяти».');
         const session=typeof this.engine.session==='function'?this.engine.session():null;
         const job={fn,type,session,episode,status:'new',phase:'generate',minimized:false,windowHidden:inline||episode&&!this.engine.settings().previewEpisodes,canceled:false};
-        job.previewDone=new Promise(resolve=>job.resolvePreview=resolve);this.job=job;this.createWindow(job);
-        if(job.windowHidden)this.onMinimize(false);else job.dialog.showModal();this.update(job);
+        job.previewDone=new Promise(resolve=>job.resolvePreview=resolve);this.job=job;try{this.createWindow(job);if(job.windowHidden)this.onMinimize(false);else job.dialog.showModal();this.update(job);}catch(error){this.clear(job);this.engine.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});throw error;}
         const draft=await this.run(job);
         if(waitForPreview&&draft)await job.previewDone;
         return draft;
@@ -26,7 +27,7 @@ export class GenerationView {
         const minimize=button('−',()=>this.minimize(job));minimize.className='pv-icon';minimize.setAttribute('aria-label','Свернуть окно генерации');head.insertBefore(minimize,close);
         job.message=node('p','pv-muted','Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.');job.progress=node('progress');job.progress.setAttribute('aria-label','Генерация выполняется');
         job.error=node('p','pv-warning');job.error.setAttribute('role','status');
-        job.retry=button('Повторить запрос',()=>{if(job.status==='error')this.run(job).catch(error=>this.engine.host?.notify?.('error',error.message));});
+        job.retry=button('Повторить запрос',()=>{if(job.status==='error')this.run(job).catch(error=>this.engine.host?.notify?.('error',error));});
         job.cancel=button('Отменить генерацию',()=>job.status==='error'?this.clear(job):this.cancel(job));
         body.append(job.message,job.progress,job.error,job.retry,job.cancel,node('p','pv-muted pv-generation-note','Продолжается внутри открытой страницы. Перезагрузка или приостановка браузера системой могут прервать запрос. Исходники исключаются только после успешного сохранения.'));
         dialog.oncancel=event=>{event.preventDefault();job.status==='error'?this.clear(job):this.cancel(job);};
@@ -55,7 +56,7 @@ export class GenerationView {
     }
     cancel(job) {
         if(this.job!==job||job.status==='saving')return;
-        job.canceled=true;this.engine.cancel();this.clear(job);
+        job.canceled=true;this.engine.host.report?.(tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:'cancel-user'}),{operation:'generate-'+job.type,status:'canceled',snapshot:{generation:'canceled',macroUsed:false}});this.engine.cancel();this.clear(job);
     }
     clear(job=this.job) {
         if(!job||this.job!==job)return;
@@ -96,15 +97,15 @@ export class GenerationView {
             return draft;
         }catch(error){
             if(!this.current(job))return null;
-            job.status='error';job.errorMessage=error?.message??String(error);this.update(job);throw error;
+            const record=this.engine.host.report?.(error,{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);this.update(job);throw error;
         }
     }
     showPreview(job) {
         if(!this.current(job)||job.status!=='ready')return;
-        try{this.assert(job);}catch(error){job.status='error';job.errorMessage=error.message;this.restore(job);return;}
+        try{this.assert(job);}catch(error){const record=this.engine.host.report?.(error,{operation:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error.message;this.restore(job);return;}
         job.status='preview';job.minimized=false;job.windowHidden=false;this.dock.hidden=true;
         if(job.dialog.open)job.dialog.close();job.dialog.remove();
         const {done,dialog}=this.preview(job.draft);job.previewDialog=dialog;
-        Promise.resolve(done).then(()=>this.clear(job),error=>{this.engine.host?.notify?.('error',error.message);this.clear(job);});
+        Promise.resolve(done).then(()=>this.clear(job),error=>{this.engine.host?.notify?.('error',error);this.clear(job);});
     }
 }

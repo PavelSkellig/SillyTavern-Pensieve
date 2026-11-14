@@ -25,8 +25,8 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             try{core.setSendButtonState(true);context().deactivateSendButtons();}catch(error){try{release();}catch(failure){diagnostics.report(failure,{notify:false});}throw tagError(error,{code:'INT-003',stage:'handler'});}
             return release;
         },
-        cancel() {
-            if(!ownGeneration)return;cancelCurrent?.();
+        cancel(reason='cancel-user') {
+            if(!ownGeneration)return;cancelCurrent?.(reason);
             try{context().stopGeneration();}catch(error){diagnostics.report(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}));try{context().eventSource.emit(context().eventTypes.GENERATION_STOPPED);}catch{}}
         },
         async generate(prompt,source) {
@@ -49,7 +49,7 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             };
             c.eventSource.on(event,literal);
             try {
-                let cancel;const stopped=new Promise((_,reject)=>cancel=()=>reject(tagError(Object.assign(Error('Генерация отменена.'),{name:'AbortError'}),{code:'GEN-006',stage:'api',reason:'cancel-user',snapshot:{macroUsed:false,generation:'canceled'}})));cancelCurrent=cancel;
+                let cancel;const stopped=new Promise((_,reject)=>cancel=(reason='cancel-user')=>reject(tagError(Object.assign(Error('Генерация отменена.'),{name:'AbortError'}),{code:'GEN-006',stage:'api',reason:reason==='chat-changed'?'chat-changed':'cancel-user',snapshot:{macroUsed:false,generation:'canceled'}})));cancelCurrent=cancel;
                 const data=await trace({code:'GEN-001',stage:'api',snapshot:{macroUsed:false,generation:'running'}},()=>Promise.race([c.generateRawData({api,prompt:[{role:'user',content:nonce}],systemPrompt:'',instructOverride:true,quietToLoud:true}),stopped]));
                 if(!applied)throw tagError(Error('SillyTavern не применил буквальный пользовательский промпт. Генерация не сохранена.'),{code:'GEN-005',stage:'response',reason:'literal-hook'});
                 const reason=data?.choices?.[0]?.finish_reason??data?.stop_reason??data?.candidates?.[0]?.finishReason;

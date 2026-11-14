@@ -435,3 +435,15 @@
 
 /* Shared generation preset controls stay within the existing mobile workspace. */
 #pensieve-panel .pv-preset-toolbar{display:grid;gap:8px;min-width:0;width:100%;box-sizing:border-box}#pensieve-panel .pv-preset-toolbar>label{min-width:0}#pensieve-panel .pv-preset-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}#pensieve-panel .pv-preset-actions button{min-width:0;width:100%;padding:7px 5px;white-space:normal;overflow-wrap:normal;word-break:normal}#pensieve-panel .pv-preset-more{margin-top:8px}#pensieve-panel .pv-preset-more>.pv-row{margin-top:8px}
+
+/* Diagnostics is in normal composer flow, never a chat-covering error modal. */
+#pensieve-diagnostics-notice{box-sizing:border-box;width:100%;min-width:0;max-height:28dvh;overflow:auto;flex:none;background:#14243D;color:#F0E8DC;border:1px solid #B79C73;border-radius:8px;padding:8px;font-size:12px;text-align:left}
+#pensieve-diagnostics-notice[hidden],.pv-diag-expanded[hidden],.pv-diag-journal[hidden]{display:none!important}
+#pensieve-diagnostics-notice p{margin:4px 0}#pensieve-diagnostics-notice small{display:block;color:#d2c2aa}
+#pensieve-diagnostics-notice[data-severity="warning"]{border-color:#88734f}#pensieve-diagnostics-notice[data-severity="info"]{border-color:#596c83}
+#pensieve-diagnostics-notice button,#pensieve-panel .pv-diag-actions button,#pensieve-panel .pv-diag-entry button{min-height:34px;min-width:0;border:1px solid #B79C73;border-radius:6px;background:#263F60;color:#F0E8DC;padding:6px 9px;white-space:normal;word-break:normal;cursor:pointer}
+#pensieve-diagnostics-notice .pv-diag-actions,#pensieve-panel .pv-diag-actions{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}#pensieve-diagnostics-notice .pv-diag-actions button,#pensieve-panel .pv-diag-actions button{flex:1 1 120px}
+#pensieve-diagnostics-notice pre,#pensieve-panel .pv-diagnostics pre{white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;font-size:11px;max-width:100%;box-sizing:border-box}
+#pensieve-panel .pv-diagnostics{width:100%;min-width:0;box-sizing:border-box;margin-top:12px;border-top:1px solid #B79C73;padding-top:10px}#pensieve-panel .pv-diagnostics>summary{color:#B79C73;cursor:pointer}
+#pensieve-panel .pv-diag-settings-body{min-width:0;font-size:12px}#pensieve-panel .pv-diag-recent{padding-left:18px}#pensieve-panel .pv-diag-journal{max-height:46dvh;overflow:auto}#pensieve-panel .pv-diag-entry{padding:7px 0;border-bottom:1px solid #596c83}#pensieve-panel .pv-diag-entry>summary{cursor:pointer}
+#pensieve-diagnostics-notice .pv-diag-manual,#pensieve-panel .pv-diag-manual{width:100%;min-height:120px;max-height:24dvh;box-sizing:border-box;white-space:pre-wrap;overflow:auto;background:#14243D;color:#F0E8DC}
