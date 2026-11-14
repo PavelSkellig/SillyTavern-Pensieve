@@ -18,8 +18,8 @@ export function normalisePromptPresets(settings){
     const allIds=[...new Set(TYPES.flatMap(t=>(groups[t]?.presets??[]).map(p=>p.id)))],ids=new Set(),names=new Set(),bundles=[],mapping=new Map();
     const append=(id,name,records)=>{id=uniqueId(ids,id);name=uniqueName(names,name);ids.add(id);names.add(name);bundles.push({id,name,records});return id;};
     const legacyDefault=TYPES.every(t=>recordAt(groups,t,'default')?.name==='Основной');
-    const untouched=legacyDefault&&TYPES.every(t=>!recordAt(groups,t,'default').history.length)&&recordAt(groups,'summary','default').text===''&&recordAt(groups,'arc','default').text===''&&recordAt(groups,'volume','default').text===VOLUME_PROMPT;
-    const mainRecords=legacyDefault&&!untouched?Object.fromEntries(TYPES.map(t=>[t,recordAt(groups,t,'default')])):Object.fromEntries(TYPES.map(t=>[t,base[t].presets[0]]));
+    const oldFactory={summary:'',arc:'',volume:VOLUME_PROMPT};
+    const mainRecords=Object.fromEntries(TYPES.map(t=>{const previous=legacyDefault?recordAt(groups,t,'default'):null,original=base[t].presets[0];return [t,previous?(!previous.history.length&&previous.text===oldFactory[t]?{...previous,text:original.text}:previous):original];}));
     append('default','Основной',mainRecords);
     if(legacyDefault)mapping.set('default','default');
     for(const id of allIds){
@@ -72,6 +72,8 @@ export function mergePromptGroups(current,incoming){
     const groups=target.prompts,map=new Map(),ids=new Set(presetList(target).map(p=>p.id)),names=new Set(presetList(target).map(p=>p.name));
     for(const p of presetList(source)){
         const values=Object.fromEntries(TYPES.map(t=>[t,recordAt(source.prompts,t,p.id)])),existing=recordAt(groups,'summary',p.id);
+        const equivalent=groups.summary.presets.find(local=>local.name===p.name&&sameTexts(Object.fromEntries(TYPES.map(t=>[t,recordAt(groups,t,local.id)])),values));
+        if(equivalent){map.set(p.id,equivalent.id);continue;}
         if(existing&&sameTexts(Object.fromEntries(TYPES.map(t=>[t,recordAt(groups,t,p.id)])),values)){map.set(p.id,p.id);continue;}
         let id=p.id;
         if(existing)id='restored-'+fingerprint({name:p.id,mes:JSON.stringify(TYPES.map(t=>[values[t].text,values[t].history]))});

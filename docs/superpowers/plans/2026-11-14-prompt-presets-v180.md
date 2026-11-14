@@ -27,7 +27,7 @@
 
 ## Task3: exact builtin + release
 - [x] Integrate exact user-provided original three texts unchanged; verify agreed limits/rules. Required before final feature completion/publication.
-- [ ] Docs/screenshot/version1.8.0, full checks and one fresh independent read-only final review. Fix Critical/Important once via RED→GREEN, no repeated review.
+- [x] Docs/screenshot/version1.8.0, full checks and one fresh independent read-only final review. Fix Critical/Important once via RED→GREEN, no repeated review.
 - [ ] Authorized publication main/tag atomic; public manifest + clean clone tests; stop own test server and remove only this plan scratch after path validation.
 
 ## Checkpoint 2026-11-14
@@ -37,3 +37,5 @@ Data model, UI, template migration and full-backup integration are implemented o
 ## Resumed with originals
 
 All3originals supplied and integrated exactly. Fresh node189/189/check16; actual builtin generation and shared-preset workflows passed Chromium/WebKit. Final independent branch review and release verification follow.
+
+Final independent review:3Important fixed RED→GREEN in one pass; no Critical. Node192/192/check16, real Chromium/WebKit exact builtin requests, restore UI, CRLF/no-op save and WebKit backup/MemoryEcho regressions passed. Release verification follows.
