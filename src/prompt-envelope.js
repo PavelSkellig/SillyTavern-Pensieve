@@ -40,6 +40,7 @@ export class PromptEnvelope {
         const delivered=!!(available&&selected),ids=memory.sourceIds??new Set();let bodyUsed=false;
         const render=(nodes,{auto=false,onlySlots=false}={})=>nodes.map(node=>{
             if(node.kind==='text')return onlySlots?'':node.text;
+            if(node.kind==='literal')return onlySlots?'':node.meta.text;
             if(node.kind==='macro')return delivered&&node===selected?memory.text:'';
             if(node.kind==='body'){if(!auto||bodyUsed)return '';bodyUsed=true;return memory.text;}
             if(node.kind==='auto')return delivered&&node===selected?render(node.children,{auto:true}):'';

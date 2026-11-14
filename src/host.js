@@ -1,6 +1,8 @@
 import {PROMPT_KEY} from './core.js';
 import {automaticMemory} from './placement.js';
 
+export const LITERAL_PROMPT=Symbol.for('pensieve-literal-prompt');
+
 export function createHost(context,core,chats,fetcher=globalThis.fetch) {
     let ownGeneration=false,deliveryFormatter=null;
     return {
@@ -29,7 +31,7 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch) {
             const literal=payload=>{
                 if(api==='openai') {
                     if(!payload.chat?.some(m=>typeof m.content==='string'&&m.content.includes(nonce)))return;
-                    payload.chat=[{role:'system',content:prompt},{role:'user',content:source}];
+                    payload.chat=[{role:'system',content:prompt,[LITERAL_PROMPT]:true},{role:'user',content:source,[LITERAL_PROMPT]:true}];
                 } else {
                     if(!payload.prompt?.includes(nonce))return;
                     payload.prompt=`${prompt}\n\n${source}`;

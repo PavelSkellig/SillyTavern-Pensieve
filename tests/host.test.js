@@ -11,7 +11,7 @@ function setup(api='openai') {
 }
 test('raw chat request preserves user prompt, literal macros and only selected input',async()=>{
  const f=setup();assert.equal(await f.host.generate('Точное {{char}}','Имя:\n{{user}}'),'raw {{char}}');
- assert.deepEqual(f.payload.chat,[{role:'system',content:'Точное {{char}}'},{role:'user',content:'Имя:\n{{user}}'}]);assert.equal(f.c.eventSource.listenerCount('cc'),0);
+ assert.deepEqual(JSON.parse(JSON.stringify(f.payload.chat)),[{role:'system',content:'Точное {{char}}'},{role:'user',content:'Имя:\n{{user}}'}]);assert.equal(f.c.eventSource.listenerCount('cc'),0);
 });
 test('text completion preserves literal source and prompt',async()=>{
  const f=setup('textgenerationwebui');await f.host.generate('Промпт {{char}}','Данные {{user}}');assert.equal(f.payload.prompt,'Промпт {{char}}\n\nДанные {{user}}');
