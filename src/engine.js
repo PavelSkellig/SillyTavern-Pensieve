@@ -7,10 +7,10 @@ import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
 import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
-import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp,sameSavedValue} from './save-recovery.js';
+import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp,sameSavedValue,archiveBody,captureSourceState,sourceProof,matchesSourceProof,sourceOutcome,chatStamp} from './save-recovery.js';
 
 export class Engine {
-    constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();host.setEngine?.(this);}
+    constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();this.nativeWrites=host.saveWrites??=new Map();host.setEngine?.(this);}
     subscribeOperation(listener){this.operationListeners.add(listener);return()=>this.operationListeners.delete(listener);}
     setOperation(patch){Object.assign(this.operation,patch);for(const listener of this.operationListeners)try{listener({...this.operation});}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
     policy(){return {...SAVE_POLICY,...this.host.savePolicy};}
@@ -37,10 +37,11 @@ export class Engine {
         if(s.key!==this.key(c)||s.chat!==c.chat||s.metadata!==c.chatMetadata)throw tagError(Error('Чат изменился. Операция остановлена; вернитесь в исходный чат.'),{code:'MEM-001',stage:'chat',reason:'chat-changed'});
     }
     archive(s=this.session()) {return s.metadata[KEY]??emptyArchive(s.key);}
-    async run(fn) {
+    async run(fn,{allowOutstanding=false}={}) {
+        const current=this.optionalSession();if(!allowOutstanding&&current&&this.nativeWrites.has(this.recovery.key(current.key)))throw this.receiptError();
         if(this.busy)throw tagError(Error('Другая операция уже выполняется. Дождитесь её завершения.'),{code:'INT-003',stage:'handler',reason:'busy'});
         this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';this.setOperation({state:'running',stage:'running',outcome:null,attempt:0,lastCheck:null,type:null,title:null,entryId:null,recordConfirmed:false});
-        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.activeReceipt=null;this.busy=false;this.cancelled=false;this.diagnosticState='idle';this.setOperation({state:['running','saving','confirming','recovering'].includes(this.operation.state)?this.operation.outcome==='saved'?'saved':'idle':this.operation.state});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}if(this.reconcileQueued){this.reconcileQueued=false;queueMicrotask(()=>this.requestReconciliation());}}
+        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.activeReceipt=null;this.saveGuard=null;this.busy=false;this.cancelled=false;this.diagnosticState='idle';this.setOperation({state:['running','saving','confirming','recovering'].includes(this.operation.state)?this.operation.outcome==='saved'?'saved':'idle':this.operation.state});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}if(this.reconcileQueued){this.reconcileQueued=false;queueMicrotask(()=>this.requestReconciliation());}}
     }
     cancel(reason='cancel-user') {this.cancelled=true;this.cancelReason=reason==='chat-changed'?'chat-changed':'cancel-user';this.host.cancel?.(this.cancelReason);}
     prompt(type) {
@@ -109,56 +110,105 @@ export class Engine {
         });
     }
     async regenerate(draft) {return this.run(()=>this.generateDraft(draft));}
+    journalKey(s,note=null){return note?.__journalKey??this.recovery.key(s.key);}
+    pinReceipt(note,key){if(note&&!note.__journalKey)Object.defineProperty(note,'__journalKey',{value:key});return note;}
+    receiptError(reason='save-unconfirmed'){this.setOperation({state:'waiting',outcome:'unknown'});return tagError(Error('Предыдущая запись ещё не подтверждена. Данные сохранены для проверки в настройках.'),{stage:'save',reason,saveOutcome:'unknown'});}
+    guardLive(s,note,disk){
+        this.assert(s);this.checkReceiptOwner(this.archive(s),note);
+        const local=this.archive(s),stored=disk.metadata?.[KEY]??emptyArchive(s.key);
+        const sameBody=sameSavedValue(archiveBody(local),archiveBody(stored));
+        const localCandidate=sameSavedValue(archiveBody(local),archiveBody(note.archive)),storedCandidate=sameSavedValue(archiveBody(stored),archiveBody(note.archive));
+        if(!sameBody&&!(archiveStamp(local)===note.base&&storedCandidate)&&!(archiveStamp(stored)===note.base&&localCandidate))throw this.receiptError('state-changed');
+        if(chatStamp(s.chat,note)!==chatStamp(disk.messages,note))throw this.receiptError('source-changed');
+        this.saveGuard={key:this.journalKey(s,note),archive:s.metadata[KEY],chat:chatStamp(s.chat,note)};
+    }
+    guardWrite(s,archive,note){
+        this.assert(s);if(this.journalKey(s,note)!==this.recovery.key(s.key))throw this.receiptError('chat-changed');
+        if(this.saveGuard&&(this.saveGuard.archive!==s.metadata[KEY]||this.saveGuard.chat!==chatStamp(s.chat,note)))throw this.receiptError('state-changed');
+        const wanted=note.archive.entries.find(e=>e.id===note.entryId),actual=archive.entries.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;
+        if(!sameSavedValue(view(actual),view(wanted)))throw this.receiptError('state-changed');
+    }
+    trackedWrite(s,archive,kind,fn,override=new Map()){
+        const note=this.activeReceipt,key=this.journalKey(s,note);if(this.nativeWrites.has(key))throw this.receiptError();
+        const target=note?.archive.entries.find(e=>e.id===note.entryId),task={timedOut:false,settled:false,started:false};this.nativeWrites.set(key,task);
+        const descriptor=note?{id:this.host.uuid(),state:'pending',kind,archive:archiveStamp(archive),chat:chatStamp(s.chat,note),sources:sourceProof(s.chat,target,override)}:null;
+        let promise;task.run=()=>promise??=(async()=>{
+            try{
+                if(note){note.write=descriptor;await this.keepReceipt(s,note);this.guardWrite(s,archive,note);}
+                if(task.timedOut)throw Object.assign(Error('Запись не запущена после истечения времени проверки.'),{name:'TimeoutError'});
+                task.started=true;return await this.recovery.writeExclusive(key,fn);
+            }finally{
+                task.settled=true;if(this.nativeWrites.get(key)===task)this.nativeWrites.delete(key);
+                if(note&&note.write?.id===descriptor.id){note.write.state='settled';try{await bounded(()=>this.recovery.settle(s.key,note.operationId,descriptor.id,key),this.policy().saveTimeout);}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning',notify:false});}}
+                if(task.timedOut){try{this.assert(s);if(key===this.recovery.key(s.key))queueMicrotask(()=>this.requestReconciliation());}catch{}}
+            }
+        })();return task;
+    }
+    writeProof(note,disk){return !!note.write&&archiveStamp(disk.metadata?.[KEY])===note.write.archive&&chatStamp(disk.messages,note)===note.write.chat&&matchesSourceProof(disk.messages,note.write.sources);}
+    async settledReceipt(s,note,disk){
+        const key=this.journalKey(s,note);if(this.nativeWrites.has(key))throw this.receiptError();
+        if(note.write?.state==='pending'){
+            if(await this.recovery.writeHeld(key)||!this.writeProof(note,disk))throw this.receiptError();
+            await bounded(()=>this.recovery.settle(s.key,note.operationId,note.write.id,key),this.policy().saveTimeout);note.write.state='settled';this.assert(s);
+        }
+    }
     async persist(s,archive,verify=null) {
-        this.assert(s);
-        if(this.activeReceipt?.intent==='restore'){this.activeReceipt.archive=clone(archive);this.activeReceipt.archive.pending??={type:'restore',entryId:this.activeReceipt.entryId,operationId:this.activeReceipt.operationId};await this.keepReceipt(s,this.activeReceipt);}
+        this.assert(s);const note=this.activeReceipt;
+        if(note)this.guardWrite(s,archive,note);
+        if(note?.intent==='restore'){note.archive=clone(archive);note.archive.owner=s.key;note.archive.pending??={type:'restore',entryId:note.entryId,operationId:note.operationId};await this.keepReceipt(s,note);this.guardWrite(s,archive,note);}
         if(bytes(archive)>MAX_ARCHIVE_BYTES&&bytes(archive)>=bytes(this.archive(s)))throw Error('Архив достиг 20 MiB. Экспортируйте его и освободите место перед добавлением.');
-        archive.owner=s.key;archive.revision=(archive.revision||0)+1;
-        s.metadata[KEY]=archive;
-        const expected=clone(archive);
-        this.setOperation({state:'saving',stage:'write',owner:s.key,scope:this.recovery.key(s.key)});
-        const target=archive.pending?.entryId??this.operation.entryId;
-        try{const verified=await verifyWrite({write:()=>trace({stage:'save'},()=>this.host.save()),read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),
-            exists:disk=>!!target&&!!disk.metadata?.[KEY]?.entries?.some(e=>e.id===target),
-            check:disk=>(!target||disk.metadata?.[KEY]?.entries?.some(e=>e.id===target&&e.version===archive.entries.find(x=>x.id===target)?.version))&&sameSavedValue(disk.metadata?.[KEY],expected)&&(!verify||verify(disk)),
-            onCheck:check=>this.setOperation({state:'confirming',stage:'confirm',...check}),
-        });if(target&&verified.metadata?.[KEY]?.entries?.some(e=>e.id===target))this.setOperation({recordConfirmed:true});}catch(error){if(!archive.pending&&this.activeReceipt?.owner===s.key)archive.pending=clone(this.activeReceipt.archive.pending);this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
-        if(bytes(archive)>WARN_ARCHIVE_BYTES)this.host.notify?.('warning','Архив больше 5 MiB. Рекомендуется экспортировать резервную копию.');
+        archive.owner=s.key;archive.revision=(archive.revision||0)+1;s.metadata[KEY]=archive;if(this.saveGuard)this.saveGuard.archive=archive;
+        const expected=clone(archive),task=this.trackedWrite(s,archive,'save',()=>trace({stage:'save'},()=>this.host.save()));
+        this.setOperation({state:'saving',stage:'write',owner:s.key,scope:this.recovery.key(s.key)});const target=archive.pending?.entryId??this.operation.entryId;
+        try{
+            const verified=await verifyWrite({write:task.run,onWriteTimeout:()=>task.timedOut=true,read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),
+                exists:disk=>!!target&&!!disk.metadata?.[KEY]?.entries?.some(e=>e.id===target),
+                check:disk=>(!target||disk.metadata?.[KEY]?.entries?.some(e=>e.id===target&&e.version===archive.entries.find(x=>x.id===target)?.version))&&sameSavedValue(disk.metadata?.[KEY],expected)&&(!note||matchesSourceProof(disk.messages,note.write.sources))&&(!verify||verify(disk)),
+                onCheck:check=>this.setOperation({state:'confirming',stage:'confirm',...check}),
+            });if(target&&verified.metadata?.[KEY]?.entries?.some(e=>e.id===target))this.setOperation({recordConfirmed:true});
+            if(!task.settled)throw this.receiptError();
+        }catch(error){if(!archive.pending&&note?.owner===s.key)archive.pending=clone(note.archive.pending);this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
+        if(bytes(archive)>WARN_ARCHIVE_BYTES)try{this.host.notify?.('warning','Архив больше 5 MiB. Рекомендуется экспортировать резервную копию.');}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',severity:'warning'});}
     }
     async refreshAfterSave(s,entry){
-        this.setOperation({stage:'tokens'});try{await bounded(()=>this.refreshMemory(),this.policy().tokensTimeout);}catch(error){this.host.report?.(error,{operation:'save-'+entry.type,severity:'warning'});}
-        this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',recordConfirmed:true,entryId:entry.id,type:entry.type,title:entry.title});return entry;
+        this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',recordConfirmed:true,entryId:entry.id,type:entry.type,title:entry.title});
+        bounded(()=>this.refreshMemory(),this.policy().tokensTimeout).catch(error=>this.host.report?.(tagError(error,{code:'MEM-005',stage:'tokens'}),{operation:'save-'+entry.type,severity:'warning'}));return entry;
     }
-    async pendingReceipt(s){const note=await bounded(()=>this.recovery.get(s.key),this.policy().readTimeout);this.assert(s);return note;}
+    async pendingReceipt(s){const key=this.recovery.key(s.key),note=await bounded(()=>this.recovery.get(s.key,key),this.policy().readTimeout);this.assert(s);return this.pinReceipt(note,key);}
     requestReconciliation(){if(this.busy){this.reconcileQueued=true;return;}return this.reconcilePending().catch(error=>this.host.report?.(error,{operation:'backup-restore'}));}
-    async keepReceipt(s,note){await trace({stage:'save',reason:'storage'},()=>bounded(()=>this.recovery.put(s.key,note),this.policy().saveTimeout));this.assert(s);this.activeReceipt=note;return note;}
-    async clearReceipt(s,note){try{await bounded(()=>this.recovery.remove(s.key,note.operationId),this.policy().saveTimeout);}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}this.assert(s);}
-    makeReceipt(s,archive,operationId,base){const entry=archive.entries.find(e=>e.id===archive.pending.entryId);return {version:1,owner:s.key,operationId,entryId:entry.id,entryVersion:entry.version,base,archive:clone(archive),createdAt:new Date().toISOString()};}
-    checkReceiptOwner(archive,note){if(archive.pending&&(archive.pending.entryId!==note.entryId||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(archive.pending.type)||archive.pending.operationId&&archive.pending.operationId!==note.operationId))throw Error('Незавершённая операция отличается от этого результата. Откройте восстановление в настройках; повторный запрос не требуется.');}
+    async keepReceipt(s,note){const key=this.journalKey(s,note);this.pinReceipt(note,key);await trace({stage:'save',reason:'storage'},()=>bounded(()=>this.recovery.put(s.key,note,key),this.policy().saveTimeout));this.assert(s);this.activeReceipt=note;if(!this.saveGuard)this.saveGuard={key,archive:s.metadata[KEY],chat:chatStamp(s.chat,note)};return note;}
+    async clearReceipt(s,note){if(this.nativeWrites.has(this.journalKey(s,note)))throw this.receiptError();try{await bounded(()=>this.recovery.remove(s.key,note.operationId,this.journalKey(s,note)),this.policy().saveTimeout);}catch(error){if(errorMeta(error).reason==='pending')throw this.receiptError();this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}this.assert(s);}
+    makeReceipt(s,archive,operationId,base,previousActive=null){const snapshot=clone(archive);snapshot.owner=s.key;const entry=snapshot.entries.find(e=>e.id===snapshot.pending.entryId);return {version:1,owner:s.key,operationId,entryId:entry.id,entryVersion:entry.version,base,archive:snapshot,sourceState:captureSourceState(entry,s.chat),previousActive:previousActive??snapshot.entries.filter(e=>e.id!==entry.id).map(e=>({id:e.id,version:e.version,active:e.active})),createdAt:new Date().toISOString()};}
+    checkReceiptOwner(archive,note){if(archive.pending&&(archive.pending.entryId!==note.entryId||archive.pending.type!==note.archive.pending.type||archive.pending.operationId&&archive.pending.operationId!==note.operationId))throw Error('Незавершённая операция отличается от этого результата. Откройте восстановление в настройках; повторный запрос не требуется.');}
+    receiptMatches(note,archive,messages){
+        const expected=note.archive.entries.find(e=>e.id===note.entryId),entry=archive?.entries?.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;
+        if(!sameSavedValue(view(entry),view(expected))||archive.pending&&(archive.pending.entryId!==note.entryId||archive.pending.type!==note.archive.pending.type||archive.pending.operationId&&archive.pending.operationId!==note.operationId))return false;
+        if(!archive.pending){if(note.intent==='restore'){if(entry.active||entry.restored&&!sourceOutcome(note,messages,true))return false;}else if(!sourceOutcome(note,messages))return false;}
+        return true;
+    }
     async inspectReceipt(s,note){
-        const expected=note.archive.entries.find(e=>e.id===note.entryId);let disk=null,lastReadFailed=false;
+        const expected=note.archive.entries.find(e=>e.id===note.entryId);let disk=null;
         this.setOperation({state:'recovering',stage:'confirm',type:expected.type,title:expected.title,entryId:expected.id,owner:s.key,scope:this.recovery.key(s.key)});
-        try{await verifyWrite({write:async()=>{},read:async()=>{lastReadFailed=true;const value=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);lastReadFailed=false;return disk=value;},assert:()=>this.assert(s),policy:this.policy(),exists:d=>d.metadata?.[KEY]?.entries?.some(e=>e.id===note.entryId),
-            check:d=>{const a=d.metadata?.[KEY],entry=a?.entries?.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;return sameSavedValue(view(entry),view(expected))&&(!a.pending||a.pending.entryId===note.entryId&&['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(a.pending.type)&&(!a.pending.operationId||a.pending.operationId===note.operationId));},
-            onCheck:check=>this.setOperation({stage:'confirm',...check}),
-        });return {status:'saved',disk};}catch(error){this.assert(s);const stored=disk?.metadata?.[KEY],entry=stored?.entries?.find(e=>e.id===note.entryId),status=lastReadFailed?'unknown':entry||stored?.pending&&stored.pending.entryId!==note.entryId?'conflict':disk?'missing':'unknown';this.setOperation({state:'waiting',stage:'confirm',outcome:status==='missing'?'missing':'unknown'});return {status,disk,error};}
+        try{await verifyWrite({write:async()=>{},read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),exists:d=>d.metadata?.[KEY]?.entries?.some(e=>e.id===note.entryId),
+            check:d=>{disk=d;return this.receiptMatches(note,d.metadata?.[KEY],d.messages);},onCheck:check=>this.setOperation({stage:'confirm',...check}),
+        });return {status:'saved',disk};}catch(error){this.assert(s);const stored=disk?.metadata?.[KEY],entry=stored?.entries?.find(e=>e.id===note.entryId),baseline=disk&&archiveStamp(stored??emptyArchive(s.key))===note.base,status=!errorMeta(error).readAccepted?'unknown':baseline?'missing':entry||stored?.pending&&stored.pending.entryId!==note.entryId?'conflict':disk?'missing':'unknown';this.setOperation({state:'waiting',stage:'confirm',outcome:status==='missing'?'missing':'unknown'});return {status,disk,error};}
     }
     async finishReceipt(s,note,disk){
-        this.checkReceiptOwner(this.archive(s),note);s.metadata[KEY]=clone(disk.metadata[KEY]);this.activeReceipt=note;
+        await this.settledReceipt(s,note,disk);this.guardLive(s,note,disk);const stored=disk.metadata[KEY],entry=stored.entries.find(e=>e.id===note.entryId);
+        if(stored.pending&&entry.type==='summary'&&inspectSources(disk.messages,entry.sources).issues.length)throw this.receiptError('source-changed');
+        s.metadata[KEY]=clone(stored);this.saveGuard.archive=s.metadata[KEY];this.activeReceipt=note;
         if(this.archive(s).pending){this.archive(s).pending.operationId=note.operationId;await this.completePending(s);}
-        await this.clearReceipt(s,note);const entry=this.archive(s).entries.find(e=>e.id===note.entryId);await this.refreshAfterSave(s,entry);return {status:'saved',entry};
+        await this.clearReceipt(s,note);const result=this.archive(s).entries.find(e=>e.id===note.entryId);await this.refreshAfterSave(s,result);return {status:'saved',entry:result};
     }
     async reconcilePending(){
-        const s=this.optionalSession();if(!s||this.busy)return null;const pending=this.archive(s).pending;
-        if(pending&&!['hide','commit'].includes(pending.type))return null;
+        const s=this.optionalSession();if(!s||this.busy)return null;const pending=this.archive(s).pending;if(pending&&!['hide','commit'].includes(pending.type))return null;
         let note=await this.pendingReceipt(s);if(!note&&!pending||this.busy||note?.intent==='restore')return null;
         return this.run(async()=>{
-            if(!note){const archive=this.archive(s),operationId=archive.pending.operationId??this.host.uuid();archive.pending.operationId=operationId;note=await this.keepReceipt(s,this.makeReceipt(s,archive,operationId,'legacy'));}
+            if(!note){const archive=clone(this.archive(s)),operationId=archive.pending.operationId??this.host.uuid();archive.pending.operationId=operationId;note=await this.keepReceipt(s,this.makeReceipt(s,archive,operationId,'legacy'));}
             this.checkReceiptOwner(this.archive(s),note);const checked=await this.inspectReceipt(s,note);
             if(checked.status==='saved'){const result=await this.finishReceipt(s,note,checked.disk);this.host.notify?.('success','Незавершённое сохранение подтверждено. Воспоминание сохранено.');return result;}
-            const current=this.archive(s);if(!current.pending&&archiveStamp(current)===note.base)s.metadata[KEY]=clone(note.archive);
             this.host.report?.(tagError(checked.error??Error('Запись ещё не подтверждена. Выполните восстановление в настройках.'),{code:'DATA-002',stage:'save',reason:'save-unconfirmed'}),{operation:'save-'+note.archive.entries.find(e=>e.id===note.entryId).type});return checked;
-        });
+        },{allowOutstanding:true});
     }
     async saveDraft(draft,{title,text}) {
         return this.run(async()=>{
@@ -169,16 +219,12 @@ export class Engine {
             if(committed&&committed.version>=draft.commitVersion){
                 if(committed.version!==draft.commitVersion||committed.type!==draft.type||committed.title!==title||committed.text!==text)throw Error('Этот результат уже записан. Завершите проверку сохранения с прежним текстом; изменения внесите через архив.');
                 if(previousReceipt&&previousReceipt.entryId!==committed.id)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
-                const note=previousReceipt??{...this.makeReceipt(s,{...archive,pending:{entryId:committed.id}},draft.operationId??this.host.uuid(),'legacy')};this.checkReceiptOwner(archive,note);
-                const checked=await this.inspectReceipt(s,note);if(checked.status==='saved')return (await this.finishReceipt(s,note,checked.disk)).entry;
-                if(checked.status==='missing'&&previousReceipt&&archiveStamp(checked.disk.metadata?.[KEY]??emptyArchive(s.key))===note.base){
-                    const candidate=clone(note.archive),entry=candidate.entries.find(e=>e.id===note.entryId);if(entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length)throw Error('Исходные сообщения изменились. Используйте безопасное восстановление в настройках.');
-                    this.activeReceipt=note;s.metadata[KEY]=candidate;await this.persist(s,candidate);await this.completePending(s);await this.clearReceipt(s,note);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===note.entryId));
-                }
-                throw checked.error??Error('Не удалось подтвердить сохранение. Используйте восстановление в настройках.');
+                const operationId=draft.operationId??this.host.uuid(),kind=committed.type==='summary'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners?.includes(committed.id))?'hide':'commit';
+                const note=previousReceipt??this.makeReceipt(s,{...archive,pending:{type:kind,entryId:committed.id,operationId}},operationId,'legacy');this.checkReceiptOwner(archive,note);
+                const checked=await this.inspectReceipt(s,note);return (await this.resumeReceipt(s,note,checked)).entry;
             }
             if(archive.pending||previousReceipt)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
-            const base=archiveStamp(archive);
+            const base=archiveStamp(archive),previousActive=archive.entries.filter(e=>e.id!==draft.commitId&&e.id!==draft.replaceId).map(e=>({id:e.id,version:e.version,active:e.active}));
             const old=draft.replaceId?archive.entries.find(e=>e.id===draft.replaceId):null;
             if(draft.replaceId&&!old)throw Error('Заменяемая запись удалена.');
             if(draft.type==='summary') {
@@ -208,7 +254,7 @@ export class Engine {
             if(!old)archive.entries.push(entry);
             draft.commitId=entry.id;draft.commitVersion=entry.version;this.setOperation({type:entry.type,title:entry.title,entryId:entry.id});
             draft.operationId??=this.host.uuid();archive.pending={type:draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id,operationId:draft.operationId};
-            const receipt=await this.keepReceipt(s,this.makeReceipt(s,archive,draft.operationId,base));
+            const receipt=await this.keepReceipt(s,this.makeReceipt(s,archive,draft.operationId,base,previousActive));
             await this.persist(s,archive,disk=>entry.type!=='summary'||inspectSources(disk.messages,entry.sources).issues.length===0);
             if(archive.pending)await this.completePending(s);
             await this.clearReceipt(s,receipt);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));
@@ -241,12 +287,13 @@ export class Engine {
             const group=[candidates[0]];
             for(const next of candidates.slice(1)){if(next.index!==group.at(-1).index+1)break;group.push(next);}
             // The native function changes the whole contiguous range synchronously, then saves once.
-            await this.host.hide(group[0].index,group.at(-1).index,false);
+            const task=this.trackedWrite(s,archive,'hide',()=>this.host.hide(group[0].index,group.at(-1).index,false),new Map(group.map(x=>[x.source.id,true])));
+            try{await bounded(task.run,this.policy().saveTimeout,()=>task.timedOut=true);}catch(error){this.setOperation({state:'waiting',stage:'sources',outcome:'unknown'});throw tagError(error,{code:'MEM-008',stage:'sources'});}
             const done=new Set(group.map(x=>x.source.id));remaining=remaining.filter(x=>!done.has(x.id));
         }
         this.assert(s);
-        await this.persist(s,archive,disk=>{const check=inspectSources(disk.messages,entry.sources);return !check.issues.length&&check.matches.every(x=>x.message.is_system===true);});
-        archive.pending=null;entry.restored=false;await this.persist(s,archive);
+        await this.persist(s,archive,disk=>{const check=inspectSources(disk.messages,entry.sources);return !check.issues.length&&check.matches.every(x=>x.message.is_system===true)&&(!this.activeReceipt||sourceOutcome(this.activeReceipt,disk.messages));});
+        archive.pending=null;entry.restored=false;await this.persist(s,archive,disk=>!this.activeReceipt||sourceOutcome(this.activeReceipt,disk.messages));
         return {issues:[]};
     }
     async restoreInternal(s,entry) {
@@ -254,8 +301,10 @@ export class Engine {
         const {matches,issues}=inspectSources(s.chat,entry.sources);
         let remaining=[];
         for(const {message:m,source} of matches) {
+            const prior=this.activeReceipt?.sourceState.find(x=>x.id===source.id);
+            if(!m.extra[KEY].exclusion&&prior&&!prior.hidden&&m.is_system)m.extra[KEY].exclusion={owners:[entry.id],previousHidden:false};
             const owned=m.extra?.[KEY]?.exclusion;
-            if(!owned?.owners.includes(entry.id))continue;
+            if(!owned?.owners?.includes(entry.id))continue;
             if(owned.owners.length>1)owned.owners=owned.owners.filter(id=>id!==entry.id);
             else remaining.push(source);
         }
@@ -267,7 +316,10 @@ export class Engine {
             const group=[candidates[0]],previousHidden=candidates[0].message.extra[KEY].exclusion.previousHidden;
             for(const next of candidates.slice(1)){if(next.index!==group.at(-1).index+1||next.message.extra[KEY].exclusion.previousHidden!==previousHidden)break;group.push(next);}
             // Markers stay present during the native save: a crash can safely retry restoration.
-            if(group.some(x=>!!x.message.is_system!==previousHidden))await this.host.hide(group[0].index,group.at(-1).index,!previousHidden);
+            if(group.some(x=>!!x.message.is_system!==previousHidden)){
+                const task=this.trackedWrite(s,archive,'unhide',()=>this.host.hide(group[0].index,group.at(-1).index,!previousHidden),new Map(group.map(x=>[x.source.id,previousHidden])));
+                try{await bounded(task.run,this.policy().saveTimeout,()=>task.timedOut=true);}catch(error){this.setOperation({state:'waiting',stage:'sources',outcome:'unknown'});throw tagError(error,{code:'MEM-008',stage:'sources'});}
+            }
             this.assert(s);
             for(const {message:m} of group)delete m.extra[KEY].exclusion;
             const done=new Set([...group.map(x=>x.source.id),...current.issues.map(x=>x.source.id)]);
@@ -277,6 +329,10 @@ export class Engine {
         for(const issue of finalSources.issues)if(!issues.some(x=>x.source.id===issue.source.id))issues.push(issue);
         entry.restored=issues.length===0;entry.active=false;
         if(entry.type==='arc')for(const source of archive.entries)if(entry.summaryIds.includes(source.id))source.active=true;
+        if(this.activeReceipt?.previousActive&&entry.type!=='summary'){
+            const children=hierarchyIndex(archive.entries).descendants(entry),previous=new Map(this.activeReceipt.previousActive.map(x=>[x.id,x]));
+            for(const child of archive.entries)if(children.has(child.id)&&previous.has(child.id)&&previous.get(child.id).version===child.version)child.active=previous.get(child.id).active;
+        }
         // Preserve unresolved ownership for changed sources, with an explicit issue marker.
         entry.needsReview=entry.needsReview||issues.length>0;
         archive.pending=null;
@@ -296,30 +352,27 @@ export class Engine {
             const result=await this.restoreInternal(s,entry);await this.refreshMemory();return result;
         });
     }
+    async resumeReceipt(s,note,checked,restore=false){
+        if(checked.status==='conflict'||checked.status==='unknown')throw checked.error??this.receiptError();
+        await this.settledReceipt(s,note,checked.disk);this.guardLive(s,note,checked.disk);
+        restore=restore||note.intent==='restore';if(!restore&&checked.status==='saved')return this.finishReceipt(s,note,checked.disk);
+        const stored=checked.disk.metadata?.[KEY]??emptyArchive(s.key);
+        if(checked.status==='missing'&&archiveStamp(stored)!==note.base)throw this.receiptError('state-changed');
+        const archive=clone(checked.status==='missing'?note.archive:stored),entry=archive.entries.find(e=>e.id===note.entryId);
+        if(!restore&&entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length)throw Error('Исходные сообщения не удалось надёжно сопоставить. Выберите «Вернуть исходники незавершённой операции», чтобы сохранить результат в архив без активации.');
+        if(restore){note.intent='restore';archive.pending={type:'restore',entryId:note.entryId,operationId:note.operationId};note.archive=clone(archive);}
+        await this.keepReceipt(s,note);await this.persist(s,archive);
+        const result=restore?await this.restoreInternal(s,entry):await this.completePending(s);
+        await this.clearReceipt(s,note);const saved=this.archive(s).entries.find(e=>e.id===note.entryId);await this.refreshAfterSave(s,saved);return {status:'saved',entry:saved,issues:result.issues??[]};
+    }
     async recover(mode) {
         return this.run(async()=>{
-            const s=this.session(),note=await this.pendingReceipt(s);let archive=this.archive(s);
-            if(note){
-                this.checkReceiptOwner(archive,note);const checked=await this.inspectReceipt(s,note);
-                if(checked.status==='conflict'||checked.status==='unknown')throw checked.error??Error('Не удалось безопасно подтвердить запись. Повторите проверку после подключения.');
-                if(mode!=='restore'&&note.intent!=='restore'&&checked.status==='saved')return this.finishReceipt(s,note,checked.disk);
-                const stored=checked.disk.metadata?.[KEY]??emptyArchive(s.key);
-                if(checked.status==='missing'){
-                    if(archiveStamp(stored)!==note.base)throw Error('Архив изменился после начала сохранения. Восстановление не будет перезаписывать новые записи.');
-                    const entry=clone(note.archive.entries.find(e=>e.id===note.entryId));
-                    if(mode==='restore'){
-                        archive=clone(stored);entry.active=false;entry.needsReview=entry.needsReview||entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length>0;archive.entries.push(entry);archive.pending={type:'commit',entryId:entry.id,operationId:note.operationId};
-                        note.archive=clone(archive);await this.keepReceipt(s,note);s.metadata[KEY]=archive;await this.persist(s,archive);await this.completePending(s);await this.clearReceipt(s,note);await this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));return {issues:[]};
-                    }
-                    if(entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length)throw Error('Исходные сообщения не удалось надёжно сопоставить. Выберите «Вернуть исходники незавершённой операции», чтобы сохранить результат в архив без активации.');
-                    archive=clone(note.archive);s.metadata[KEY]=archive;this.activeReceipt=note;await this.persist(s,archive);
-                }else{archive=clone(stored);s.metadata[KEY]=archive;this.activeReceipt=note;}
-                if(mode==='restore'||note.intent==='restore'){mode='restore';if(archive.pending){archive.pending.type='restore';note.intent='restore';note.archive=clone(archive);await this.keepReceipt(s,note);}}
-            }
+            const s=this.session();let note=await this.pendingReceipt(s),archive=this.archive(s);
+            if(!note&&['hide','commit'].includes(archive.pending?.type)){const copy=clone(archive),operationId=copy.pending.operationId??this.host.uuid();copy.pending.operationId=operationId;note=await this.keepReceipt(s,this.makeReceipt(s,copy,operationId,'legacy'));}
+            if(note){this.checkReceiptOwner(archive,note);const checked=await this.inspectReceipt(s,note);return this.resumeReceipt(s,note,checked,mode==='restore');}
             if(mode==='restore'&&archive.pending?.type==='backup'){await this.saveBackupGlobals(s,archive.pending.previousGlobals);archive.entries.forEach(e=>e.active=false);archive.pending=null;await this.persist(s,archive);await this.refreshMemory();return {issues:[]};}
-            if(mode==='restore'&&archive.pending) {archive.pending.type='restore';await this.persist(s,archive);}
-            const result=archive.pending?await this.completePending(s):await this.persist(s,archive);
-            if(note){await this.clearReceipt(s,note);await this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===note.entryId));}else await this.refreshMemory();return result;
+            if(mode==='restore'&&archive.pending){archive.pending.type='restore';await this.persist(s,archive);}
+            const result=archive.pending?await this.completePending(s):await this.persist(s,archive);await this.refreshMemory();return result;
         });
     }
     async change(fn) {

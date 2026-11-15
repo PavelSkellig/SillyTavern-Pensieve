@@ -6,6 +6,7 @@ import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,
 import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
+import {bounded} from './save-recovery.js';
 import {GenerationView,operationLabel} from './generation-view.js';
 import {messageLabels} from './source-links.js';
 
@@ -43,7 +44,7 @@ export class UI {
         this.restoreDock=el('div',{id:'pensieve-restore-dock',hidden:'true'});
         const restore=iconButton('Омут памяти',()=>this.restore(),'fa-book-open');restore.setAttribute('aria-label','Восстановить Омут памяти');this.restoreDock.append(restore);
         this.restoreButton=restore;this.operationBanner=el('div',{class:'pv-operation-banner',role:'status',hidden:'true'});this.panel.querySelector('.pv-notice').before(this.operationBanner);
-        this.operationUnsubscribe=this.e.subscribeOperation?.(snapshot=>{this.operationSnapshot=snapshot;this.syncOperationDock();});
+        this.operationSnapshot={...this.e.operation};this.operationUnsubscribe=this.e.subscribeOperation?.(snapshot=>{this.operationSnapshot=snapshot;this.syncOperationDock();});
         const composer=document.getElementById('send_form');
         if(composer)composer.before(this.restoreDock);else this.panel.before(this.restoreDock);
         if(!head.querySelector('.pv-sky')){const sky=el('div',{class:'pv-sky','aria-hidden':'true'});for(const name of ['hills','bridge','castle','eagle','sky-line'])sky.append(el('span',{class:'pv-'+name}));head.prepend(sky);}
@@ -88,7 +89,7 @@ export class UI {
         },{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}));
         for(const name of ['MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_SWIPED','MESSAGE_DELETED','MESSAGE_SENT','MESSAGE_RECEIVED','MORE_MESSAGES_LOADED','USER_MESSAGE_RENDERED','CHARACTER_MESSAGE_RENDERED'])if(c.eventTypes[name])c.eventSource.on(c.eventTypes[name],()=>this.schedule());
         const chat=document.querySelector('#chat');if(chat)new MutationObserver(records=>{if(records.some(r=>[...r.addedNodes].some(n=>n.nodeType===1&&(n.matches?.('.mes')||n.querySelector?.('.mes')))))this.schedule();}).observe(chat,{childList:true,subtree:true});
-        this.loadRange();await this.refresh();
+        this.loadRange();this.syncOperationDock();await this.refresh().catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));
     }
     rangeStorageKey() {return `pensieve_range_v1:${this.rangeChatKey}`;}
     loadRange() {
@@ -259,11 +260,13 @@ export class UI {
         this.content.scrollTop=saved.scroll;
     }
     go(tab,force=false) {if(!force&&this.canReuseView(tab))return;this.tab=tab;this.showNotice('');this.render().catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));}
-    async refresh(render=false) {
+    memorySnapshot(){return trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.e.refreshMemory(),this.e.policy().tokensTimeout));}
+    postSaveRefresh(){this.refresh(true,this.e.peekMemory?.()).catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));}
+    async refresh(render=false,snapshot=null) {
         if(this.windowState!=='open')this.resumeDirty=true;
         const tab=this.tab;
         this.panel.dataset.theme=this.e.settings().theme;
-        const memory=await this.e.refreshMemory();this.lastMemory=memory;try{this.decorateMessages();}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
+        const memory=snapshot??await this.memorySnapshot();this.lastMemory=memory;try{this.decorateMessages();}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
         if(memory.blocked&&tab!=='memory'){this.memoryNotice=memory.reason;this.showNotice(memory.reason);}
         else if(this.panel.querySelector('.pv-notice').textContent===this.memoryNotice){this.showNotice('');this.memoryNotice=null;}
         if(render&&this.panel.open&&this.tab===tab)await this.render(memory);
@@ -290,7 +293,7 @@ export class UI {
             try{this.settingsView(archive);}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});if(!this.content.querySelector('.pv-diagnostics'))this.diagnosticsView?.settings(this.content);}
             this.restoreView();return;
         }
-        const memory=snapshot??await this.e.refreshMemory();if(stamp!==this.renderId)return;this.e.assert(session);
+        const memory=snapshot??await this.memorySnapshot();if(stamp!==this.renderId)return;this.e.assert(session);
         const archive=this.e.archive(session);this.lastMemory=memory;this.viewState=memoryViewState(archive.entries,memory,[...this.chosen,...this.chaptersChosen]);this.sourceRanges=this.e.orderEntries(archive.entries).ranges;
         if(this.rangeChatKey!==this.e.key())this.loadRange();else this.resolveRange();
         this.content.replaceChildren();
@@ -554,6 +557,7 @@ export class UI {
         if(!archive){this.diagnosticsView?.settings(this.content);return;}
         const recovery=el('details',{class:'pv-recovery'});recovery.append(el('summary',{},'Восстановление'));archiveGroup.append(recovery);
         if(archive.pending?.type==='backup')recovery.append(el('p',{class:'pv-muted'},'Завершение повторно проверит целую копию и выбранные промпты/настройки. «Оставить копию в архиве без активности» сохранит её тексты, отключит все записи и вернёт выбранные общие разделы в состояние до восстановления. Прежний архив после подтверждённой замены это действие не возвращает.'));
+        recovery.append(button('Посмотреть незавершённый результат',()=>this.act(async()=>{const session=this.e.session(),note=await this.e.pendingReceipt(session);if(!note){this.showNotice('Незавершённого результата нет.');return;}const entry=note.archive.entries.find(e=>e.id===note.entryId);this.textDialog('Незавершённый результат',entry.title+'\n\n'+entry.text);})));
         recovery.append(row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button(archive.pending?.type==='backup'?'Оставить копию в архиве без активности':'Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
         recovery.append(button('Восстановить все исходники',()=>this.act(async()=>{
             const session=this.e.session();
@@ -625,7 +629,7 @@ export class UI {
     async generating(fn,options={}) {
         this.generationView??=new GenerationView(this.e,{
             makeDialog:(...args)=>this.makeDialog(...args),preview:draft=>{const done=this.preview(draft);return {done,dialog:this.editor};},
-            onSaved:async draft=>{await this.episodeSaved(draft);await this.refresh(true);},
+            onSaved:async draft=>{await this.episodeSaved(draft);this.postSaveRefresh();},
             onMinimize:(explicit=true)=>{if(explicit&&this.panel?.open)this.minimize();if(this.restoreDock&&this.windowState==='minimized')this.restoreDock.hidden=true;},
             onClear:job=>{this.lastMinimizedOperation=!!job.windowHidden;this.syncOperationDock();},
         });
@@ -637,13 +641,13 @@ export class UI {
         const title=el('input',{value:draft.title,'aria-label':'Название воспоминания'}),text=el('textarea',{'aria-label':'Текст воспоминания'},draft.text);
         body.append(field('Название',title),field('Текст — можно отредактировать перед сохранением',text));
         const notice=el('p',{role:'status'});body.append(notice);let saving=false,finished=false;
-        const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;
+        const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;const previewJob=owned();if(previewJob)previewJob.previewStatus=notice;
         const finish=()=>{if(finished)return;finished=true;dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};
         const minimize=button('−',()=>{const job=owned();if(job)this.generationView.minimize(job);});minimize.className='pv-icon';minimize.setAttribute('aria-label','Свернуть окно воспоминания');dialog.querySelector('.pv-header button').before(minimize);
         const save=button('Сохранить',async()=>{
-            saving=true;save.disabled=true;regen.disabled=true;const job=owned();if(job){job.previewSaving=true;this.generationView.paint(job);}
-            try{const saved=await this.e.saveDraft(draft,{title:title.value,text:text.value});await this.episodeSaved(draft);dialog.savedEntry=saved;if(dialog.open)dialog.close();else finish();await this.refresh(true).catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));this.showNotice('Воспоминание сохранено.');}
-            catch(error){notice.textContent=this.issue(error,{severity:'error'});}
+            saving=true;save.disabled=true;regen.disabled=true;const job=owned();if(job){job.previewError='';job.previewSaving=true;this.generationView.paint(job);}
+            try{const saved=await this.e.saveDraft(draft,{title:title.value,text:text.value});await this.episodeSaved(draft);dialog.savedEntry=saved;if(dialog.open)dialog.close();else finish();this.postSaveRefresh();this.showNotice('Воспоминание сохранено.');}
+            catch(error){notice.textContent=this.issue(error,{severity:'error'});if(job)job.previewError=notice.textContent;}
             finally{saving=false;save.disabled=false;regen.disabled=!!draft.commitId;if(job){job.previewSaving=false;this.generationView.paint(job);}}
         },true);
         const regen=button('Повторить генерацию',async()=>{save.disabled=true;regen.disabled=true;try{await this.e.regenerate(draft);text.value=draft.text;}catch(error){notice.textContent=this.issue(error,{severity:'error'});}finally{save.disabled=false;regen.disabled=false;}});

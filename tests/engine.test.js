@@ -106,10 +106,11 @@ test('recovery verifies staged archive before its first hide, even if first save
  f.readFails=true;let hides=0;const native=f.host.hide;f.host.hide=async(...args)=>{hides++;return native(...args)};
  await assert.rejects(()=>f.e.recover('complete'));assert.equal(hides,0);assert.equal(f.c.chat[1].is_system,false);
 });
-test('source indices are resolved again after each awaited hide',async()=>{
+test('chat deletion during awaited hide pauses persistence without hiding unrelated messages',async()=>{
  const f=fixture();let once=true;const native=f.host.hide;
  f.host.hide=async(...args)=>{await native(...args);if(once){once=false;f.c.chat.splice(0,1);}};
- await saved(f,1,2);
+ await assert.rejects(()=>saved(f,1,2));
+ assert.equal(f.e.busy,false);assert.equal(f.e.operation.state,'waiting');assert.ok(f.e.archive().pending);
  assert.equal(f.c.chat.find(m=>m.mes==='Исходник 3').is_system,false);
  assert.equal(f.c.chat.find(m=>m.mes==='Исходник 2').is_system,true);
 });
