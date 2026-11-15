@@ -1,7 +1,7 @@
 /** Additive book levels. Legacy record IDs, titles and prompt keys stay intact. */
 export const LEVELS={
-    summary:{name:'Глава',plural:'Главы',genitive:'главы',many:'глав',icon:'fa-bookmark',legacy:['Эпизод','Сводка']},
-    arc:{name:'Часть',plural:'Части',genitive:'части',many:'частей',icon:'fa-book-open',legacy:['Глава','Арка'],sourceType:'summary'},
+    summary:{name:'Глава',plural:'Главы',genitive:'главы',many:'глав',icon:'fa-file-lines',legacy:['Эпизод','Сводка']},
+    arc:{name:'Часть',plural:'Части',genitive:'части',many:'частей',icon:'fa-box-archive',legacy:['Глава','Арка'],sourceType:'summary'},
     volume:{name:'Том',plural:'Тома',genitive:'тома',many:'томов',icon:'fa-book',sourceType:'arc'},
 };
 export const childrenIds=entry=>entry?.type==='volume'?entry.chapterIds??[]:entry?.type==='arc'?entry.summaryIds??[]:[];

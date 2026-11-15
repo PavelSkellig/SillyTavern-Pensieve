@@ -18,6 +18,7 @@ export function validatePromptGroups(value) {
 const booleanSettings=['enabled','inject','exclude','collapse','pastNoteEnabled','previewEpisodes'];
 export function validateBackupSettings(value) {
     if(!ownObject(value))throw Error('В копии отсутствуют настройки памяти.');const result={};
+    if(value.showMessageLabels!==undefined){if(typeof value.showMessageLabels!=='boolean')throw Error('Повреждена настройка меток сообщений.');result.showMessageLabels=value.showMessageLabels;}
     for(const key of booleanSettings){if(typeof value[key]!=='boolean')throw Error('Повреждена настройка памяти: '+key);result[key]=value[key];}
     if(!Number.isSafeInteger(value.tokenLimit)||value.tokenLimit<1||!Number.isInteger(value.depth)||value.depth<0||value.depth>10000||![-1,0,1,2].includes(value.position)||!['dark','light'].includes(value.theme))throw Error('Неверные лимит, позиция или тема памяти.');
     Object.assign(result,{tokenLimit:value.tokenLimit,depth:value.depth,position:value.position,theme:value.theme,pastNote:requireString(value.pastNote,'пометка о прошлом')});
@@ -55,7 +56,7 @@ export function planRestore(current,backup,{targetKey,mode='merge',activate=fals
     let skipped=0,conflicts=0,detached=0;
     for(const entry of incoming.entries){
         const origin=originOf(entry,backup.source.key),key=JSON.stringify([origin.chat,origin.id]),existing=byOrigin.get(key);
-        if(existing){if(existing.type!==entry.type)throw Error('Копия меняет уровень уже существующей записи.');map.set(entry.id,existing.id);skipped++;if(content(existing,archive.entries,targetKey)!==content(entry,incoming.entries,backup.source.key))conflicts++;matched.push([existing,entry]);continue;}
+        if(existing){if(existing.type!==entry.type)throw Error('Копия меняет уровень уже существующей записи.');map.set(entry.id,existing.id);skipped++;if(content(existing,archive.entries,targetKey)!==content(entry,incoming.entries,backup.source.key))conflicts++;else{if(!existing.compression&&entry.compression)existing.compression=clone(entry.compression);for(let i=0;i<existing.history.length;i++)if(!existing.history[i].compression&&entry.history[i]?.compression)existing.history[i].compression=clone(entry.history[i].compression);}matched.push([existing,entry]);continue;}
         let id=entry.id;if(used.has(id)){if(typeof uuid!=='function')throw Error('Не удалось переназначить ID.');let attempts=0;do{id=uuid();if(++attempts>100)throw Error('Не удалось получить уникальный ID.');}while(used.has(id));}
         if(typeof id!=='string'||!id)throw Error('Некорректный новый ID записи.');used.add(id);map.set(entry.id,id);
         const sourceChat=entry.sourceChat??origin.chat,foreign=hasDetachedSources(entry)||sourceChat!==targetKey||entry.type==='summary'&&inspectSources(chat,entry.sources).issues.length>0;

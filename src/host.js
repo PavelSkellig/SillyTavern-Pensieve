@@ -1,6 +1,7 @@
 import {Diagnostics,trace,tagError,diagnosticSnapshot} from './diagnostics.js';
-import {PROMPT_KEY} from './core.js';
+import {PROMPT_KEY,fingerprint} from './core.js';
 import {automaticMemory} from './placement.js';
+import {TOKENIZER_NAMES,validateCounter} from './compression.js';
 
 export const LITERAL_PROMPT=Symbol.for('pensieve-literal-prompt');
 
@@ -12,6 +13,29 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
     const host={
         diagnostics,setEngine(engine){attachedEngine=engine;},report:(error,meta={})=>diagnostics.report(error,meta),emergencyUnlock:release,
         context,uuid:()=>context().uuidv4(),count:text=>context().getTokenCountAsync(text),
+        async statisticsCounter(){
+            const [native,{power_user}]=await Promise.all([import('/scripts/tokenizers.js'),import('/scripts/power-user.js')]),c=context(),t=native.tokenizers;
+            let type=c.mainApi==='openai'?t.OPENAI:power_user.tokenizer;if(type===t.BEST_MATCH)type=native.getTokenizerBestMatch(c.mainApi);
+            if(type===t.API_CURRENT)type=c.mainApi==='textgenerationwebui'?t.API_TEXTGENERATIONWEBUI:['kobold','koboldhorde'].includes(c.mainApi)?t.API_KOBOLD:t.NONE;
+            const names={GPT2:'gpt2',OPENAI:'openai',LLAMA:'llama',NERD:'nerdstash',NERD2:'nerdstash_v2',MISTRAL:'mistral',YI:'yi',CLAUDE:'claude',LLAMA3:'llama3',GEMMA:'gemma',JAMBA:'jamba',QWEN2:'qwen2',COMMAND_R:'command-r',NEMO:'nemo',DEEPSEEK:'deepseek',COMMAND_A:'command-a'},name=Object.keys(names).find(key=>t[key]===type);
+            if(name)return {kind:'server',tokenizer:names[name],...(type===t.OPENAI?{model:String(native.getTokenizerModel()).slice(0,256)}:{})};
+            if(type===t.API_TEXTGENERATIONWEBUI){const api=await import('/scripts/textgen-settings.js');return {kind:'current',tokenizer:'remote-textgen',signature:fingerprint({name:'tokenizer',mes:JSON.stringify([c.mainApi,api.textgenerationwebui_settings.type,api.getTextGenServer(),api.getTextGenModel()])})};}
+            if(type===t.API_KOBOLD){const {kai_settings}=await import('/scripts/kai-settings.js');return {kind:'current',tokenizer:'remote-kobold',signature:fingerprint({name:'tokenizer',mes:JSON.stringify([c.mainApi,kai_settings.api_server,core.online_status??''])})};}
+            return {kind:'estimate'};
+        },
+        async countStatistic(text,recipe,signal){
+            recipe=validateCounter(recipe);if(!text)return 0;
+            if(recipe.kind==='current'){
+                if(JSON.stringify(await host.statisticsCounter())!==JSON.stringify(recipe))throw Error('Токенизатор изменился.');
+                let body,endpoint;if(recipe.tokenizer==='remote-textgen'){const api=await import('/scripts/textgen-settings.js');endpoint='/api/tokenizers/remote/textgenerationwebui/encode';body={text,api_type:api.textgenerationwebui_settings.type,url:api.getTextGenServer(),model:api.getTextGenModel()};}else{const {kai_settings}=await import('/scripts/kai-settings.js');endpoint='/api/tokenizers/remote/kobold/count';body={text,url:kai_settings.api_server};}
+                const response=await fetcher(endpoint,{method:'POST',headers:context().getRequestHeaders(),body:JSON.stringify(body),signal});if(!response.ok)throw Error('Удалённый токенизатор не ответил.');const data=await response.json();
+                if(!Array.isArray(data.ids)||!data.ids.length||JSON.stringify(await host.statisticsCounter())!==JSON.stringify(recipe))throw Error('Токенизатор изменился или недоступен.');return data.ids.length;
+            }
+            if(recipe.kind!=='server'||!TOKENIZER_NAMES.has(recipe.tokenizer))throw Error('Точный токенизатор недоступен.');
+            const endpoint=`/api/tokenizers/${recipe.tokenizer}/encode`+(recipe.tokenizer==='openai'?`?model=${encodeURIComponent(recipe.model??'')}`:'');
+            const response=await fetcher(endpoint,{method:'POST',headers:context().getRequestHeaders(),body:JSON.stringify({text}),signal});if(!response.ok)throw Error('Токенизатор не ответил.');
+            const data=await response.json();if(!Array.isArray(data.ids)||!data.ids.length)throw Error('Токенизатор вернул некорректный результат.');return data.ids.length;
+        },
         configuration() {
             const c=context();return JSON.stringify([c.mainApi,c.maxContext,c.chatCompletionSettings,c.textCompletionSettings,core.amount_gen]);
         },

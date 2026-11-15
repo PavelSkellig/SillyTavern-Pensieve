@@ -8,6 +8,7 @@ import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} fro
 import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
 import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp,sameSavedValue,archiveBody,captureSourceState,sourceProof,matchesSourceProof,sourceOutcome,chatStamp} from './save-recovery.js';
+import {createCompression,editCompression} from './compression.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();this.nativeWrites=host.saveWrites??=new Map();host.setEngine?.(this);}
@@ -19,7 +20,7 @@ export class Engine {
         c.extensionSettings[KEY]??=defaults();const settings=c.extensionSettings[KEY];
         let changed=false;if(settings.prompts&&!Object.hasOwn(settings.prompts,'volume')){settings.prompts.volume=defaults().prompts.volume;changed=true;}
         if(!Object.hasOwn(settings,'previewEpisodes')){settings.previewEpisodes=true;changed=true;}
-        for(const [key,value]of Object.entries({position:1,depth:4,role:0,template:''}))if(!Object.hasOwn(settings,key)){settings[key]=value;changed=true;}
+        for(const [key,value]of Object.entries({position:-1,depth:4,role:0,template:'',showMessageLabels:true}))if(!Object.hasOwn(settings,key)){settings[key]=value;changed=true;}
         if(!settings.templateDefaultsVersion){if(typeof settings.template==='string'&&!settings.template.trim())settings.template=DEFAULT_INJECTION_TEMPLATE;settings.templateDefaultsVersion=1;changed=true;}
         if(normalisePromptPresets(settings))changed=true;
         if(changed)c.saveSettingsDebounced?.();
@@ -82,7 +83,7 @@ export class Engine {
             if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
             if(typeof text!=='string')throw tagError(Error('Модель вернула некорректный формат ответа. Исходные сообщения не изменены.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
             if(!text.trim())throw tagError(Error('Модель вернула пустой ответ. Исходные сообщения не изменены.'),{code:'GEN-004',stage:'response',reason:'empty'});
-            draft.text=text;draft.preset=preset.name;return draft;
+            draft.text=text;draft.preset=preset.name;draft.compressionSource=source;return draft;
         } finally {try{unlock?.();}catch(error){this.host.report?.(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}),{severity:'warning'});try{this.host.emergencyUnlock?.();}catch(failure){this.host.report?.(failure,{code:'INT-004',stage:'unlock',reason:'release',notify:false});}}}
     }
     async generateSummary(start,end,{allowOverlap=false,replaceId=null}={}) {
@@ -238,12 +239,16 @@ export class Engine {
             } else {
                 if(childrenIds(draft).some((id,i)=>archive.entries.find(e=>e.id===id)?.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Повторите генерацию.');
             }
+            this.setOperation({stage:'tokens',type:draft.type,title});
+            const compression=typeof draft.compressionSource==='string'?await createCompression(draft.compressionSource,text,this.compressionOptions()):null;
+            this.assert(s);if(archiveStamp(this.archive(s))!==base)throw Error('Архив изменился во время подсчёта статистики. Повторите сохранение.');
+            if(draft.type==='summary')this.checkRange(s,draft.range);
             const now=new Date().toISOString();
             const entry=old?reviseEntry(archive.entries,old.id,{title,text}):{
                 id:draft.commitId??this.host.uuid(),type:draft.type,title,text,createdAt:now,updatedAt:now,order:draft.order,version:1,history:[],active:true,
                 sources:[],summaryIds:[],needsReview:false,restored:false,preset:draft.preset,
             };
-            entry.active=true;entry.preset=draft.preset;
+            entry.active=true;entry.preset=draft.preset;if(compression)entry.compression=compression;
             if(draft.type==='summary')entry.sources=draft.range.map(sourceRecord);
             else {
                 if(draft.type==='volume')entry.chapterIds=[...draft.chapterIds];else entry.summaryIds=[...draft.summaryIds];
@@ -377,12 +382,13 @@ export class Engine {
     }
     async change(fn) {
         return this.run(async()=>{
-            const s=this.session(),archive=clone(this.archive(s));
+            const s=this.session(),archive=clone(this.archive(s)),before=archiveStamp(this.archive(s));
             if(archive.pending)throw Error('Сначала завершите незавершённую операцию.');
-            await fn(archive,s);await this.persist(s,archive);await this.refreshMemory();return archive;
+            await fn(archive,s);this.assert(s);if(before!==archiveStamp(this.archive(s)))throw Error('Архив изменился во время операции. Повторите действие.');await this.persist(s,archive);await this.refreshMemory();return archive;
         });
     }
-    edit(id,patch) {return this.change(a=>reviseEntry(a.entries,id,patch));}
+    compressionOptions(){return {host:this.host,bounded,timeout:this.policy().tokensTimeout,hash:text=>fingerprint({name:'compression-result',mes:text})};}
+    edit(id,patch) {return this.change(async(a,s)=>{const current=a.entries.find(e=>e.id===id);if(!current)throw Error('Запись не найдена.');const compression=current.compression?await editCompression(current.compression,patch.text,this.compressionOptions()):null;this.assert(s);const entry=reviseEntry(a.entries,id,patch);if(compression)entry.compression=compression;return entry;});}
     toggle(id,active) {return this.change(a=>{const e=a.entries.find(e=>e.id===id);if(!e)throw Error('Запись не найдена.');if(e.type==='volume'){const covered=hierarchyIndex(a.entries).descendants(e);for(const child of a.entries)if(covered.has(child.id))child.active=false;}e.active=active;});}
     disableAll() {return this.change(a=>a.entries.forEach(e=>e.active=false));}
     deleteEntry(id,restoreSummaries=false,{unlink=false}={}) {

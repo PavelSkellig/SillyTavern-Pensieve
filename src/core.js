@@ -1,6 +1,7 @@
 import {BUILTIN_PROMPTS} from './builtin-prompts.js';
 import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
+import {validateCompression} from './compression.js';
 export const KEY = 'pensieve';
 export const VOLUME_PROMPT='Объедини выбранные части ролевой истории в единый том долгосрочной памяти. Сохрани последовательность событий, причины и последствия, развитие персонажей и отношений, важные факты, тайны, решения, обещания, предметы и незавершённые сюжетные линии. Покажи актуальное состояние истории на конец тома. Удали повторения, сохраняя значимые сведения. Не копируй части механически, не придумывай событий и дат, не меняй хронологию. Используй только предоставленные тексты частей.';
 export const PROMPT_KEY = 'pensieve_active_memory_v1';
@@ -10,7 +11,7 @@ export const clone = value => structuredClone(value);
 export const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 export const defaults = () => ({
     enabled: true, inject: true, exclude: true, collapse: false, previewEpisodes:true,
-    tokenLimit: 6000, position: 0, depth: 4, role:0, template:DEFAULT_INJECTION_TEMPLATE, theme: 'dark',
+    tokenLimit: 6000, position: -1, depth: 4, role:0, template:DEFAULT_INJECTION_TEMPLATE, theme: 'dark',showMessageLabels:true,
     pastNoteEnabled: true,
     pastNote: 'Ниже приведены сведения о ранее произошедших событиях. Учитывай их для последовательности истории и поведения персонажей, но не пересказывай прошлое без необходимости и не разыгрывай завершённые события повторно.',
     prompts: { summary: { selected: 'default', presets: [{id:'default',name:'Основной',text:BUILTIN_PROMPTS.summary,history:[]}] }, arc: { selected:'default',presets:[{id:'default',name:'Основной',text:BUILTIN_PROMPTS.arc,history:[]}] },volume:{selected:'default',presets:[{id:'default',name:'Основной',text:BUILTIN_PROMPTS.volume,history:[]}]} },
@@ -92,7 +93,7 @@ export function memoryText(entries,settings,orderedEntries=null) {
 export function reviseEntry(entries,id,patch) {
     const entry=entries.find(e=>e.id===id); if(!entry)throw Error('Запись не найдена.');
     if(typeof patch.text!=='string'||!patch.text.trim()||typeof patch.title!=='string'||!patch.title.trim())throw Error('Название и текст не должны быть пустыми.');
-    entry.history.push({version:entry.version,title:entry.title,text:entry.text,updatedAt:entry.updatedAt});
+    entry.history.push({version:entry.version,title:entry.title,text:entry.text,updatedAt:entry.updatedAt,...(entry.compression?{compression:clone(entry.compression)}:{})});
     entry.title=patch.title;entry.text=patch.text;entry.version++;entry.updatedAt=new Date().toISOString();
     for(const parent of hierarchyIndex(entries).ancestors(entry))parent.needsReview=true;
     return entry;
@@ -118,7 +119,8 @@ export function validateArchive(input) {
             createdAt:requireText(e.createdAt,'createdAt',100),updatedAt:requireText(e.updatedAt??e.createdAt,'updatedAt',100),sources,
             summaryIds:e.summaryIds.map(id=>requireText(id,'summaryId',200)),
             ...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>requireText(id,'chapterId',200))}:{}),
-            history:e.history.map(h=>({version:Number(h.version)||1,title:requireText(h.title,'history title',2000),text:requireText(h.text,'history text'),updatedAt:typeof h.updatedAt==='string'?h.updatedAt:e.createdAt})),
+            history:e.history.map(h=>({version:Number(h.version)||1,title:requireText(h.title,'history title',2000),text:requireText(h.text,'history text'),updatedAt:typeof h.updatedAt==='string'?h.updatedAt:e.createdAt,...(h.compression!==undefined?{compression:validateCompression(h.compression)}:{})})),
+            ...(e.compression!==undefined?{compression:validateCompression(e.compression)}:{}),
             needsReview:!!e.needsReview,restored:!!e.restored,imported:!!e.imported,preset:typeof e.preset==='string'?e.preset:'',
             ...(e.origin?{origin:clone(e.origin)}:{}),...(e.sourceChat!==undefined?{sourceChat:e.sourceChat}:{}),...(e.detachedSources!==undefined?{detachedSources:e.detachedSources}:{}),...(e.backupActive!==undefined?{backupActive:e.backupActive}:{}),
         };
