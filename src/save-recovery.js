@@ -35,3 +35,5 @@ export class SaveJournal {
  async remove(owner,operationId){const current=await this.get(owner);if(current?.operationId===operationId)await this.storage.removeItem(this.key(owner));}
 }
 export const archiveStamp=archive=>fingerprint({name:KEY,mes:JSON.stringify(archive)});
+const ordered=value=>Array.isArray(value)?value.map(ordered):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,ordered(value[key])])):value;
+export const sameSavedValue=(a,b)=>JSON.stringify(ordered(a))===JSON.stringify(ordered(b));

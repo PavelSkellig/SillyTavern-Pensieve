@@ -4,6 +4,7 @@ import {UI} from './src/ui.js';
 import {installMemoryEcho} from './src/memory-echo.js';
 import {Diagnostics,tagError,describeError,trace} from './src/diagnostics.js';
 import {DiagnosticsView,setErrorSink} from './src/diagnostics-view.js';
+import {SaveJournal} from './src/save-recovery.js';
 const runtime=globalThis[Symbol.for('sillytavern.pensieve.runtime')]??={};
 function storage(){try{return globalThis.localStorage;}catch{return null;}}
 export function boot(){
@@ -11,10 +12,11 @@ export function boot(){
         const context=()=>globalThis.SillyTavern.getContext();
         const diagnostics=runtime.diagnostics??=new Diagnostics({storage:storage()});
         const view=runtime.view??=new DiagnosticsView(diagnostics);setErrorSink((error,meta)=>diagnostics.report(error,{code:'INT-002',stage:'handler',operation:'ui',...meta}));
-        const [core,chats,user]=await trace({code:'INT-002',stage:'startup',operation:'startup'},()=>Promise.all([import('/script.js'),import('/scripts/chats.js'),import('/scripts/user.js')]));
+        const [core,chats,user,{localforage}]=await trace({code:'INT-002',stage:'startup',operation:'startup'},()=>Promise.all([import('/script.js'),import('/scripts/chats.js'),import('/scripts/user.js'),import('/lib.js')]));
         diagnostics.getScope=()=>user.getCurrentUserHandle();diagnostics.stVersion=()=>core.CLIENT_VERSION;
         verifyHost(context(),core,chats);
-        const host=createHost(context,core,chats,globalThis.fetch,diagnostics),engine=new Engine(host);engine.settings();let echo=null;
+        const host=createHost(context,core,chats,globalThis.fetch,diagnostics);host.recovery=new SaveJournal(localforage.createInstance({name:'SillyTavern_Pensieve_Recovery'}),()=>user.getCurrentUserHandle());
+        const engine=new Engine(host);engine.settings();let echo=null;
         globalThis.pensieveGenerationInterceptor=async(request,_contextSize,abort,type)=>{
             if(type==='quiet'&&engine.busy)return;
             try{
@@ -27,6 +29,8 @@ export function boot(){
         catch(error){diagnostics.report(error,{code:'MEM-011',stage:'registration',operation:'startup'});}
         try{const response=await fetch(new URL('./panel.html',import.meta.url));if(!response.ok)throw Error('Не удалось загрузить панель «Омута памяти».');await ui.mount(await response.text());}
         catch(error){diagnostics.report(error,{code:'UI-001',stage:'ui',operation:'startup',severity:'warning'});}
+        context().eventSource.on(context().eventTypes.CHAT_CHANGED,()=>engine.requestReconciliation());
+        engine.requestReconciliation();
         return {engine,ui,echo,diagnostics};
     })();
 }

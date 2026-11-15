@@ -7,7 +7,7 @@ import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
 import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
-import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp} from './save-recovery.js';
+import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp,sameSavedValue} from './save-recovery.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();host.setEngine?.(this);}
@@ -40,7 +40,7 @@ export class Engine {
     async run(fn) {
         if(this.busy)throw tagError(Error('Другая операция уже выполняется. Дождитесь её завершения.'),{code:'INT-003',stage:'handler',reason:'busy'});
         this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';this.setOperation({state:'running',stage:'running',outcome:null,attempt:0,lastCheck:null,type:null,title:null,entryId:null});
-        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.busy=false;this.cancelled=false;this.diagnosticState='idle';if(['running','saving','confirming','recovering'].includes(this.operation.state))this.setOperation({state:this.operation.outcome==='saved'?'saved':'idle'});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
+        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.activeReceipt=null;this.busy=false;this.cancelled=false;this.diagnosticState='idle';if(['running','saving','confirming','recovering'].includes(this.operation.state))this.setOperation({state:this.operation.outcome==='saved'?'saved':'idle'});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}if(this.reconcileQueued){this.reconcileQueued=false;queueMicrotask(()=>this.requestReconciliation());}}
     }
     cancel(reason='cancel-user') {this.cancelled=true;this.cancelReason=reason==='chat-changed'?'chat-changed':'cancel-user';this.host.cancel?.(this.cancelReason);}
     prompt(type) {
@@ -86,7 +86,7 @@ export class Engine {
     }
     async generateSummary(start,end,{allowOverlap=false,replaceId=null}={}) {
         return this.run(async()=>{
-            const s=this.session();if(this.archive(s).pending)throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
+            const s=this.session();if(this.archive(s).pending||await this.pendingReceipt(s))throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(this.archive(s).entries,range);
             if(replaceId&&hasDetachedSources(this.archive(s).entries.find(e=>e.id===replaceId)))throw Error('Источники этой копии относятся к другому чату. Создайте отдельную новую главу.');
             if(overlaps.length&&!allowOverlap)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
@@ -99,7 +99,7 @@ export class Engine {
     async generateCollection(type,ids,{replaceId=null}={}) {
         return this.run(async()=>{
             const s=this.session(),entries=this.archive(s).entries;
-            if(this.archive(s).pending)throw Error('Сначала завершите незавершённую операцию.');
+            if(this.archive(s).pending||await this.pendingReceipt(s))throw Error('Сначала завершите незавершённую операцию.');
             if(!Array.isArray(ids)||ids.length<2||new Set(ids).size!==ids.length)throw Error('Выберите не менее двух разных исходных записей.');
             const chosen=ids.map(id=>entries.find(e=>e.id===id));
             if(chosen.some(e=>e?.type!==LEVELS[type].sourceType))throw Error('Выбран неверный уровень или отсутствующая исходная запись.');
@@ -111,33 +111,74 @@ export class Engine {
     async regenerate(draft) {return this.run(()=>this.generateDraft(draft));}
     async persist(s,archive,verify=null) {
         this.assert(s);
+        if(this.activeReceipt?.intent==='restore'){this.activeReceipt.archive=clone(archive);this.activeReceipt.archive.pending??={type:'restore',entryId:this.activeReceipt.entryId,operationId:this.activeReceipt.operationId};await this.keepReceipt(s,this.activeReceipt);}
         if(bytes(archive)>MAX_ARCHIVE_BYTES&&bytes(archive)>=bytes(this.archive(s)))throw Error('Архив достиг 20 MiB. Экспортируйте его и освободите место перед добавлением.');
         archive.owner=s.key;archive.revision=(archive.revision||0)+1;
         s.metadata[KEY]=archive;
-        const expected=JSON.stringify(archive);
+        const expected=clone(archive);
         this.setOperation({state:'saving',stage:'write'});
         const target=archive.pending?.entryId??this.operation.entryId;
         try{await verifyWrite({write:()=>trace({stage:'save'},()=>this.host.save()),read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),
             exists:disk=>!!target&&!!disk.metadata?.[KEY]?.entries?.some(e=>e.id===target),
-            check:disk=>(!target||disk.metadata?.[KEY]?.entries?.some(e=>e.id===target&&e.version===archive.entries.find(x=>x.id===target)?.version))&&JSON.stringify(disk.metadata?.[KEY])===expected&&(!verify||verify(disk)),
+            check:disk=>(!target||disk.metadata?.[KEY]?.entries?.some(e=>e.id===target&&e.version===archive.entries.find(x=>x.id===target)?.version))&&sameSavedValue(disk.metadata?.[KEY],expected)&&(!verify||verify(disk)),
             onCheck:check=>this.setOperation({state:'confirming',stage:'confirm',...check}),
-        });}catch(error){this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
+        });}catch(error){if(!archive.pending&&this.activeReceipt?.owner===s.key)archive.pending=clone(this.activeReceipt.archive.pending);this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
         if(bytes(archive)>WARN_ARCHIVE_BYTES)this.host.notify?.('warning','Архив больше 5 MiB. Рекомендуется экспортировать резервную копию.');
     }
     async refreshAfterSave(s,entry){
         this.setOperation({stage:'tokens'});try{await bounded(()=>this.refreshMemory(),this.policy().tokensTimeout);}catch(error){this.host.report?.(error,{operation:'save-'+entry.type,severity:'warning'});}
         this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',entryId:entry.id,type:entry.type,title:entry.title});return entry;
     }
+    async pendingReceipt(s){const note=await bounded(()=>this.recovery.get(s.key),this.policy().readTimeout);this.assert(s);return note;}
+    requestReconciliation(){if(this.busy){this.reconcileQueued=true;return;}return this.reconcilePending().catch(error=>this.host.report?.(error,{operation:'backup-restore'}));}
+    async keepReceipt(s,note){await trace({stage:'save',reason:'storage'},()=>bounded(()=>this.recovery.put(s.key,note),this.policy().saveTimeout));this.assert(s);this.activeReceipt=note;return note;}
+    async clearReceipt(s,note){try{await bounded(()=>this.recovery.remove(s.key,note.operationId),this.policy().saveTimeout);}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}this.assert(s);}
+    makeReceipt(s,archive,operationId,base){const entry=archive.entries.find(e=>e.id===archive.pending.entryId);return {version:1,owner:s.key,operationId,entryId:entry.id,entryVersion:entry.version,base,archive:clone(archive),createdAt:new Date().toISOString()};}
+    checkReceiptOwner(archive,note){if(archive.pending&&(archive.pending.entryId!==note.entryId||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(archive.pending.type)||archive.pending.operationId&&archive.pending.operationId!==note.operationId))throw Error('Незавершённая операция отличается от этого результата. Откройте восстановление в настройках; повторный запрос не требуется.');}
+    async inspectReceipt(s,note){
+        const expected=note.archive.entries.find(e=>e.id===note.entryId);let disk=null;
+        this.setOperation({state:'recovering',stage:'confirm',type:expected.type,title:expected.title,entryId:expected.id});
+        try{await verifyWrite({write:async()=>{},read:async()=>disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),exists:d=>d.metadata?.[KEY]?.entries?.some(e=>e.id===note.entryId),
+            check:d=>{const a=d.metadata?.[KEY],entry=a?.entries?.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;return sameSavedValue(view(entry),view(expected))&&(!a.pending||a.pending.entryId===note.entryId&&['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(a.pending.type)&&(!a.pending.operationId||a.pending.operationId===note.operationId));},
+            onCheck:check=>this.setOperation({stage:'confirm',...check}),
+        });return {status:'saved',disk};}catch(error){this.assert(s);const stored=disk?.metadata?.[KEY],entry=stored?.entries?.find(e=>e.id===note.entryId),status=entry||stored?.pending&&stored.pending.entryId!==note.entryId?'conflict':disk?'missing':'unknown';this.setOperation({state:'waiting',stage:'confirm',outcome:status==='missing'?'missing':'unknown'});return {status,disk,error};}
+    }
+    async finishReceipt(s,note,disk){
+        this.checkReceiptOwner(this.archive(s),note);s.metadata[KEY]=clone(disk.metadata[KEY]);this.activeReceipt=note;
+        if(this.archive(s).pending){this.archive(s).pending.operationId=note.operationId;await this.completePending(s);}
+        await this.clearReceipt(s,note);const entry=this.archive(s).entries.find(e=>e.id===note.entryId);await this.refreshAfterSave(s,entry);return {status:'saved',entry};
+    }
+    async reconcilePending(){
+        const s=this.optionalSession();if(!s||this.busy)return null;const pending=this.archive(s).pending;
+        if(pending&&!['hide','commit'].includes(pending.type))return null;
+        let note=await this.pendingReceipt(s);if(!note&&!pending||this.busy||note?.intent==='restore')return null;
+        return this.run(async()=>{
+            if(!note){const archive=this.archive(s),operationId=archive.pending.operationId??this.host.uuid();archive.pending.operationId=operationId;note=await this.keepReceipt(s,this.makeReceipt(s,archive,operationId,'legacy'));}
+            this.checkReceiptOwner(this.archive(s),note);const checked=await this.inspectReceipt(s,note);
+            if(checked.status==='saved'){const result=await this.finishReceipt(s,note,checked.disk);this.host.notify?.('success','Незавершённое сохранение подтверждено. Воспоминание сохранено.');return result;}
+            const current=this.archive(s);if(!current.pending&&archiveStamp(current)===note.base)s.metadata[KEY]=clone(note.archive);
+            this.host.report?.(tagError(checked.error??Error('Запись ещё не подтверждена. Выполните восстановление в настройках.'),{code:'DATA-002',stage:'save',reason:'save-unconfirmed'}),{operation:'save-'+note.archive.entries.find(e=>e.id===note.entryId).type});return checked;
+        });
+    }
     async saveDraft(draft,{title,text}) {
         return this.run(async()=>{
             this.diagnosticState='saving';const s=draft.session;this.assert(s);
             if(!title?.trim()||!text?.trim())throw Error('Введите название и непустой текст.');
-            const archive=clone(this.archive(s));if(archive.pending)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
+            const archive=clone(this.archive(s)),previousReceipt=await this.pendingReceipt(s);
             const committed=draft.commitId&&archive.entries.find(e=>e.id===draft.commitId);
             if(committed&&committed.version>=draft.commitVersion){
                 if(committed.version!==draft.commitVersion||committed.type!==draft.type||committed.title!==title||committed.text!==text)throw Error('Этот результат уже записан. Завершите проверку сохранения с прежним текстом; изменения внесите через архив.');
-                await this.persist(s,archive);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===committed.id));
+                if(previousReceipt&&previousReceipt.entryId!==committed.id)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
+                const note=previousReceipt??{...this.makeReceipt(s,{...archive,pending:{entryId:committed.id}},draft.operationId??this.host.uuid(),'legacy')};this.checkReceiptOwner(archive,note);
+                const checked=await this.inspectReceipt(s,note);if(checked.status==='saved')return (await this.finishReceipt(s,note,checked.disk)).entry;
+                if(checked.status==='missing'&&previousReceipt&&archiveStamp(checked.disk.metadata?.[KEY]??emptyArchive(s.key))===note.base){
+                    const candidate=clone(note.archive),entry=candidate.entries.find(e=>e.id===note.entryId);if(entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length)throw Error('Исходные сообщения изменились. Используйте безопасное восстановление в настройках.');
+                    this.activeReceipt=note;s.metadata[KEY]=candidate;await this.persist(s,candidate);await this.completePending(s);await this.clearReceipt(s,note);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===note.entryId));
+                }
+                throw checked.error??Error('Не удалось подтвердить сохранение. Используйте восстановление в настройках.');
             }
+            if(archive.pending||previousReceipt)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
+            const base=archiveStamp(archive);
             const old=draft.replaceId?archive.entries.find(e=>e.id===draft.replaceId):null;
             if(draft.replaceId&&!old)throw Error('Заменяемая запись удалена.');
             if(draft.type==='summary') {
@@ -166,10 +207,11 @@ export class Engine {
             }
             if(!old)archive.entries.push(entry);
             draft.commitId=entry.id;draft.commitVersion=entry.version;this.setOperation({type:entry.type,title:entry.title,entryId:entry.id});
-            archive.pending={type:draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id};
+            draft.operationId??=this.host.uuid();archive.pending={type:draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id,operationId:draft.operationId};
+            const receipt=await this.keepReceipt(s,this.makeReceipt(s,archive,draft.operationId,base));
             await this.persist(s,archive,disk=>entry.type!=='summary'||inspectSources(disk.messages,entry.sources).issues.length===0);
             if(archive.pending)await this.completePending(s);
-            return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));
+            await this.clearReceipt(s,receipt);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));
         });
     }
     async completePending(s) {
@@ -179,7 +221,7 @@ export class Engine {
         const entry=archive.entries.find(e=>e.id===pending.entryId);if(!entry)throw Error('Журнал ссылается на отсутствующую запись. Экспортируйте архив и обратитесь за восстановлением.');
         if(pending.type==='restore')return this.restoreInternal(s,entry);
         // Recovery must pass the same durability gate as the first attempt.
-        await this.persist(s,archive,disk=>inspectSources(disk.messages,entry.sources).issues.length===0);
+        await this.persist(s,archive,disk=>!entry.active||inspectSources(disk.messages,entry.sources).issues.length===0);
         if(pending.type==='commit') {archive.pending=null;await this.persist(s,archive);return {issues:[]};}
         const {matches,issues}=inspectSources(s.chat,entry.sources);
         if(issues.length)throw Error('Исходники незавершённой операции изменены или недоступны. Используйте восстановление; сообщения не будут скрыты автоматически.');
@@ -256,11 +298,28 @@ export class Engine {
     }
     async recover(mode) {
         return this.run(async()=>{
-            const s=this.session(),archive=this.archive(s);
+            const s=this.session(),note=await this.pendingReceipt(s);let archive=this.archive(s);
+            if(note){
+                this.checkReceiptOwner(archive,note);const checked=await this.inspectReceipt(s,note);
+                if(checked.status==='conflict'||checked.status==='unknown')throw checked.error??Error('Не удалось безопасно подтвердить запись. Повторите проверку после подключения.');
+                if(mode!=='restore'&&note.intent!=='restore'&&checked.status==='saved')return this.finishReceipt(s,note,checked.disk);
+                const stored=checked.disk.metadata?.[KEY]??emptyArchive(s.key);
+                if(checked.status==='missing'){
+                    if(archiveStamp(stored)!==note.base)throw Error('Архив изменился после начала сохранения. Восстановление не будет перезаписывать новые записи.');
+                    const entry=clone(note.archive.entries.find(e=>e.id===note.entryId));
+                    if(mode==='restore'){
+                        archive=clone(stored);entry.active=false;entry.needsReview=entry.needsReview||entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length>0;archive.entries.push(entry);archive.pending={type:'commit',entryId:entry.id,operationId:note.operationId};
+                        note.archive=clone(archive);await this.keepReceipt(s,note);s.metadata[KEY]=archive;await this.persist(s,archive);await this.completePending(s);await this.clearReceipt(s,note);await this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));return {issues:[]};
+                    }
+                    if(entry.type==='summary'&&inspectSources(s.chat,entry.sources).issues.length)throw Error('Исходные сообщения не удалось надёжно сопоставить. Выберите «Вернуть исходники незавершённой операции», чтобы сохранить результат в архив без активации.');
+                    archive=clone(note.archive);s.metadata[KEY]=archive;this.activeReceipt=note;await this.persist(s,archive);
+                }else{archive=clone(stored);s.metadata[KEY]=archive;this.activeReceipt=note;}
+                if(mode==='restore'||note.intent==='restore'){mode='restore';if(archive.pending){archive.pending.type='restore';note.intent='restore';note.archive=clone(archive);await this.keepReceipt(s,note);}}
+            }
             if(mode==='restore'&&archive.pending?.type==='backup'){await this.saveBackupGlobals(s,archive.pending.previousGlobals);archive.entries.forEach(e=>e.active=false);archive.pending=null;await this.persist(s,archive);await this.refreshMemory();return {issues:[]};}
             if(mode==='restore'&&archive.pending) {archive.pending.type='restore';await this.persist(s,archive);}
             const result=archive.pending?await this.completePending(s):await this.persist(s,archive);
-            await this.refreshMemory();return result;
+            if(note){await this.clearReceipt(s,note);await this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===note.entryId));}else await this.refreshMemory();return result;
         });
     }
     async change(fn) {
