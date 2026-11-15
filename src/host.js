@@ -13,6 +13,15 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
     const host={
         diagnostics,setEngine(engine){attachedEngine=engine;},report:(error,meta={})=>diagnostics.report(error,meta),emergencyUnlock:release,
         context,uuid:()=>context().uuidv4(),count:text=>context().getTokenCountAsync(text),
+        async macroPresence(){
+            const c=context();if(c.mainApi!=='openai')return {status:'unknown'};
+            const {promptManager}=await import('/scripts/openai.js');if(!promptManager?.activeCharacter)return {status:'unknown'};
+            const order=promptManager.getPromptOrderForCharacter(promptManager.activeCharacter);if(!Array.isArray(order)||!order.length)return {status:'unknown'};
+            const enabled=order.filter(entry=>entry.enabled).map(entry=>promptManager.getPromptById(entry.identifier)).filter(prompt=>prompt&&promptManager.shouldTrigger(prompt,'normal'));
+            // Inspect raw enabled preset fields only; preparing them could execute unrelated macros.
+            const present=enabled.some(prompt=>typeof prompt.content==='string'&&/{{\s*memory_echo\s*}}/i.test(prompt.content));
+            return {status:present?'present':'missing',scope:'enabled-preset'};
+        },
         async statisticsCounter(){
             const [native,{power_user}]=await Promise.all([import('/scripts/tokenizers.js'),import('/scripts/power-user.js')]),c=context(),t=native.tokenizers;
             let type=c.mainApi==='openai'?t.OPENAI:power_user.tokenizer;if(type===t.BEST_MATCH)type=native.getTokenizerBestMatch(c.mainApi);
