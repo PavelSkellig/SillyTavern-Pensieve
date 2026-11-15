@@ -6,7 +6,7 @@ import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,
 import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
-import {GenerationView} from './generation-view.js';
+import {GenerationView,operationLabel} from './generation-view.js';
 import {messageLabels} from './source-links.js';
 
 export {UI_VERSION};
@@ -42,6 +42,8 @@ export class UI {
         this.panel.querySelector('[data-action="close"]').onclick=()=>this.close();
         this.restoreDock=el('div',{id:'pensieve-restore-dock',hidden:'true'});
         const restore=iconButton('Омут памяти',()=>this.restore(),'fa-book-open');restore.setAttribute('aria-label','Восстановить Омут памяти');this.restoreDock.append(restore);
+        this.restoreButton=restore;this.operationBanner=el('div',{class:'pv-operation-banner',role:'status',hidden:'true'});this.panel.querySelector('.pv-notice').before(this.operationBanner);
+        this.operationUnsubscribe=this.e.subscribeOperation?.(snapshot=>{this.operationSnapshot=snapshot;this.syncOperationDock();});
         const composer=document.getElementById('send_form');
         if(composer)composer.before(this.restoreDock);else this.panel.before(this.restoreDock);
         if(!head.querySelector('.pv-sky')){const sky=el('div',{class:'pv-sky','aria-hidden':'true'});for(const name of ['hills','bridge','castle','eagle','sky-line'])sky.append(el('span',{class:'pv-'+name}));head.prepend(sky);}
@@ -138,9 +140,8 @@ export class UI {
         });}finally{progress?.remove();this.episodeTask=false;this.decorateMessages();}
     }
     async episodeSaved(draft) {
-        if(draft.type!=='summary')return;
-        if(this.rangeChatKey===draft.session.key&&this.rangeEdges.start?.ref===draft.range[0]?.ref&&this.rangeEdges.end?.ref===draft.range.at(-1)?.ref)this.clearRange();
-        this.decorateMessages();this.e.host.notify('success','Глава сохранена в памяти текущего чата.');
+        try{if(draft.type==='summary'&&this.rangeChatKey===draft.session.key&&this.rangeEdges.start?.ref===draft.range[0]?.ref&&this.rangeEdges.end?.ref===draft.range.at(-1)?.ref)this.clearRange();this.decorateMessages();}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
+        try{this.e.host.notify('success',({summary:'Глава сохранена',arc:'Часть сохранена',volume:'Том сохранён'})[draft.type]+' в памяти текущего чата.');}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
     }
     async mountSettingsDrawer() {
         const {toggleDrawer}=await import('/scripts/utils.js');
@@ -204,16 +205,27 @@ export class UI {
     }
     open(tab=this.tab) {
         const force=this.windowState==='closed'||this.windowState==='minimized'&&tab!=='prompts';
-        this.windowState='open';this.restoreDock.hidden=true;
+        this.windowState='open';this.lastMinimizedOperation=false;this.restoreDock.hidden=true;
         if(!this.panel.open)this.panel.show();
         // ST replaces chat metadata before emitting CHAT_CHANGED. Check the live
         // session synchronously, including during a pending chat network request.
         this.go(tab,force);
+        this.syncOperationDock();
         this.resumeDirty=false;
     }
-    minimize() {if(!this.panel.open)return;this.windowState='minimized';this.restoreDock.hidden=!!this.generationView?.isMinimized;this.panel.close();}
+    minimize() {if(!this.panel.open)return;this.windowState='minimized';this.panel.close();this.syncOperationDock();}
     restore() {this.open();}
     close() {this.windowState='closed';this.restoreDock.hidden=true;this.panel.close();}
+    syncOperationDock(){
+        if(!this.restoreDock)return;let op=this.operationSnapshot;
+        try{if(op?.scope&&op.scope!==this.e.recovery.key(this.e.key()))op=null;}catch{op=null;}
+        const visible=op&&op.state!=='idle',label=visible?operationLabel(op):'Омут памяти';
+        if(visible&&!this.panel.open&&!this.generationView?.job&&['saving','confirming','recovering','waiting','error'].includes(op.state))this.lastMinimizedOperation=true;
+        this.operationBanner.hidden=!visible;this.operationBanner.textContent=visible?label+(op.lastCheck?` · Последняя проверка: ${new Date(op.lastCheck).toLocaleTimeString()}`:''):'';
+        this.restoreButton.querySelector('span').textContent=`Омут памяти · ${label==='Омут памяти'?'':label+' · '}Развернуть`;
+        this.restoreDock.hidden=!!this.generationView?.isMinimized||!(this.windowState==='minimized'||this.lastMinimizedOperation&&visible);
+        this.restoreDock.setAttribute('aria-busy',String(!!this.e.busy));
+    }
     isCurrentSession() {try{if(!this.renderSession)return false;this.e.assert(this.renderSession);return true;}catch{return false;}}
     canReuseView(tab) {
         if(this.content.dataset.view!==tab||this.content.dataset.ready!=='true')return false;
@@ -615,7 +627,7 @@ export class UI {
             makeDialog:(...args)=>this.makeDialog(...args),preview:draft=>{const done=this.preview(draft);return {done,dialog:this.editor};},
             onSaved:async draft=>{await this.episodeSaved(draft);await this.refresh(true);},
             onMinimize:(explicit=true)=>{if(explicit&&this.panel?.open)this.minimize();if(this.restoreDock&&this.windowState==='minimized')this.restoreDock.hidden=true;},
-            onClear:()=>{if(this.restoreDock)this.restoreDock.hidden=this.windowState!=='minimized';},
+            onClear:job=>{this.lastMinimizedOperation=!!job.windowHidden;this.syncOperationDock();},
         });
         return this.generationView.generate(fn,options);
     }
@@ -624,16 +636,19 @@ export class UI {
         const {dialog,body}=this.makeDialog(`Предварительный просмотр ${LEVELS[draft.type].genitive}`,true);this.editor=dialog;
         const title=el('input',{value:draft.title,'aria-label':'Название воспоминания'}),text=el('textarea',{'aria-label':'Текст воспоминания'},draft.text);
         body.append(field('Название',title),field('Текст — можно отредактировать перед сохранением',text));
-        const notice=el('p',{role:'status'});body.append(notice);
+        const notice=el('p',{role:'status'});body.append(notice);let saving=false,finished=false;
+        const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;
+        const finish=()=>{if(finished)return;finished=true;dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};
+        const minimize=button('−',()=>{const job=owned();if(job)this.generationView.minimize(job);});minimize.className='pv-icon';minimize.setAttribute('aria-label','Свернуть окно воспоминания');dialog.querySelector('.pv-header button').before(minimize);
         const save=button('Сохранить',async()=>{
-            save.disabled=true;regen.disabled=true;
-            try{const saved=await this.e.saveDraft(draft,{title:title.value,text:text.value});await this.episodeSaved(draft);dialog.savedEntry=saved;dialog.close();await this.refresh(true);this.showNotice('Воспоминание сохранено.');}
+            saving=true;save.disabled=true;regen.disabled=true;const job=owned();if(job){job.previewSaving=true;this.generationView.paint(job);}
+            try{const saved=await this.e.saveDraft(draft,{title:title.value,text:text.value});await this.episodeSaved(draft);dialog.savedEntry=saved;if(dialog.open)dialog.close();else finish();await this.refresh(true).catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));this.showNotice('Воспоминание сохранено.');}
             catch(error){notice.textContent=this.issue(error,{severity:'error'});}
-            finally{save.disabled=false;regen.disabled=false;}
+            finally{saving=false;save.disabled=false;regen.disabled=!!draft.commitId;if(job){job.previewSaving=false;this.generationView.paint(job);}}
         },true);
         const regen=button('Повторить генерацию',async()=>{save.disabled=true;regen.disabled=true;try{await this.e.regenerate(draft);text.value=draft.text;}catch(error){notice.textContent=this.issue(error,{severity:'error'});}finally{save.disabled=false;regen.disabled=false;}});
-        body.append(row(save,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>this.e.cancel()),button('Отмена',()=>{if(this.e.busy)this.e.cancel();dialog.close();})));
-        dialog.oncancel=()=>{if(this.e.busy)this.e.cancel();};dialog.onclose=()=>{dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};dialog.showModal();
+        body.append(row(save,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(!saving)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(this.e.busy)this.e.cancel();dialog.close();})));
+        dialog.oncancel=event=>{if(saving){event.preventDefault();minimize.click();}else if(this.e.busy)this.e.cancel();};dialog.onclose=()=>{if(dialog.pensieveMinimizeClosures){dialog.pensieveMinimizeClosures--;return;}finish();};dialog.showModal();
         });
     }
     editEntry(entry,editable) {

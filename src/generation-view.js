@@ -3,6 +3,19 @@ import {tagError,describeError} from './diagnostics.js';
 import {LEVELS} from './hierarchy.js';
 
 const labels={summary:{making:'глава',ready:'Глава готова'},arc:{making:'часть',ready:'Часть готова'},volume:{making:'том',ready:'Том готов'}};
+export function operationLabel(op={}){
+    const title=op.title?` · ${op.title}`:'',target=({summary:'главу',arc:'часть',volume:'том'})[op.type]??'воспоминание';
+    if(op.state==='waiting'&&op.recordConfirmed)return `Запись сохранена${title} · Ожидает завершения проверки` ;
+    if(op.state==='waiting')return `Ошибка: ожидает восстановления${title} · ${op.outcome==='missing'?'Запись пока не обнаружена':'Результат пока неизвестен'}`;
+    if(op.state==='error')return `Ошибка операции${title}${op.outcome==='saved'?' · Запись сохранена, требуется завершить обработку':''}`;
+    if(op.state==='saved')return `Сохранено${title}`;
+    if(op.state==='canceled')return 'Операция отменена';
+    if(op.stage==='tokens')return `Проверяю токены${title}${op.outcome==='saved'?' · Запись подтверждена':''}`;
+    if(op.stage==='confirm')return `Проверяю сохранение${title}${op.attempt?` · Проверка ${op.attempt}/3`:''}`;
+    if(op.stage==='write')return `Сохраняю ${target}${title}`;
+    if(op.stage==='api')return `Создаю ${target}${title} · Другой запрос к модели должен подождать`;
+    return 'Операция выполняется';
+}
 const node=(tag,className='',text='')=>{const n=document.createElement(tag);n.className=className;n.textContent=text;return n;};
 const button=(text,action)=>{const n=node('button','',text);n.type='button';n.addEventListener('click',guardAction(action,{stage:'handler',operation:'ui',severity:'warning'}));return n;};
 
@@ -10,6 +23,7 @@ const button=(text,action)=>{const n=node('button','',text);n.type='button';n.ad
 export class GenerationView {
     constructor(engine,{makeDialog,preview,onSaved,onMinimize=()=>{},onClear=()=>{}}) {
         Object.assign(this,{engine,makeDialog,preview,onSaved,onMinimize,onClear});this.job=null;
+        this.unsubscribe=engine.subscribeOperation?.(op=>{if(this.job){this.job.operation=op;this.paint(this.job);}});
     }
     get isMinimized(){return !!this.job?.windowHidden;}
     async generate(fn,{type='summary',episode=false,inline=false,waitForPreview=false}={}) {
@@ -38,24 +52,26 @@ export class GenerationView {
     assert(job){if(job.session)this.engine.assert(job.session);}
     update(job) {
         if(this.job!==job)return;
-        const running=job.status==='running',saving=job.status==='saving',error=job.status==='error';
+        const running=job.status==='running',saving=job.status==='saving'||job.previewSaving,error=job.status==='error';
         job.dialog.dataset.generationState=job.status;job.progress.hidden=!running&&!saving;job.error.hidden=!error;job.error.textContent=job.errorMessage??'';
-        job.message.textContent=saving?'Результат получен. Проверяется сохранение на сервере…':'Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.';
+        job.message.textContent=job.operation&&['running','saving','confirming','recovering','waiting'].includes(job.operation.state)?operationLabel(job.operation):saving?'Результат получен. Проверяется сохранение на сервере…':'Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.';
         job.retry.hidden=!error;job.retry.disabled=!error;job.retry.textContent=job.phase==='save'?'Повторить сохранение':job.phase==='preview'?'Показать результат повторно':'Повторить запрос';job.cancel.textContent=error?'Закрыть':'Отменить генерацию';job.cancel.disabled=saving;job.close.disabled=saving;
-        const label=labels[job.type];const title=job.status==='ready'?label.ready:error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Омут памяти — сохраняется глава':'Омут памяти — создаётся '+label.making;
-        this.dock.replaceChildren(button(title,()=>this.restore(job)));this.dock.hidden=!job.windowHidden;
+        const label=labels[job.type],op=job.operation;const title=job.status==='ready'?label.ready:op&&['running','saving','confirming','recovering','waiting','error','saved'].includes(op.state)?operationLabel(op):error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Сохраняется '+label.making:'Создаётся '+label.making;
+        this.dock.replaceChildren(button(`Омут памяти · ${title} · Развернуть`,()=>this.restore(job)));this.dock.hidden=!job.windowHidden;this.dock.setAttribute('aria-busy',String(!!this.engine.busy));
     }
     minimize(job) {
-        if(this.job!==job||!['running','saving','error'].includes(job.status))return;
-        job.minimized=true;job.windowHidden=true;if(job.dialog.open)job.dialog.close();this.onMinimize();this.update(job);
+        if(this.job!==job||!['running','saving','error','preview'].includes(job.status))return;
+        job.minimized=true;job.windowHidden=true;const dialog=job.previewDialog?.isConnected?job.previewDialog:job.dialog;
+        if(dialog.open){if(dialog===job.previewDialog)dialog.pensieveMinimizeClosures=(dialog.pensieveMinimizeClosures??0)+1;dialog.close();}this.onMinimize();this.paint(job);
     }
     restore(job) {
-        if(!this.current(job)||!['running','saving','ready','error'].includes(job.status))return;
+        if(!this.current(job)||!['running','saving','ready','error','preview'].includes(job.status))return;
+        if(job.previewDialog?.isConnected){job.minimized=false;job.windowHidden=false;this.paint(job);if(!job.previewDialog.open)job.previewDialog.showModal();return;}
         if(job.status==='ready'){this.showPreview(job);return;}
         job.minimized=false;job.windowHidden=false;this.update(job);if(!job.dialog.open)job.dialog.showModal();
     }
     cancel(job) {
-        if(this.job!==job||job.status==='saving')return;
+        if(this.job!==job||job.status==='saving'||job.previewSaving)return;
         job.canceled=true;this.engine.host.report?.(tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:'cancel-user'}),{operation:'generate-'+job.type,status:'canceled',snapshot:{generation:'canceled',macroUsed:false}});this.engine.cancel();this.clear(job);
     }
     clear(job=this.job) {
@@ -63,7 +79,7 @@ export class GenerationView {
         job.canceled=true;this.job=null;
         for(const dialog of [job.dialog,job.previewDialog])if(dialog?.isConnected){if(dialog.open)dialog.close();dialog.remove();}
         if(this.dock){this.dock.hidden=true;this.dock.replaceChildren();}
-        job.resolvePreview(null);this.onClear();
+        job.resolvePreview(null);this.onClear(job);
     }
     async save(job) {
         this.assert(job);

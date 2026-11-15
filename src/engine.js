@@ -39,8 +39,8 @@ export class Engine {
     archive(s=this.session()) {return s.metadata[KEY]??emptyArchive(s.key);}
     async run(fn) {
         if(this.busy)throw tagError(Error('Другая операция уже выполняется. Дождитесь её завершения.'),{code:'INT-003',stage:'handler',reason:'busy'});
-        this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';this.setOperation({state:'running',stage:'running',outcome:null,attempt:0,lastCheck:null,type:null,title:null,entryId:null});
-        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.activeReceipt=null;this.busy=false;this.cancelled=false;this.diagnosticState='idle';if(['running','saving','confirming','recovering'].includes(this.operation.state))this.setOperation({state:this.operation.outcome==='saved'?'saved':'idle'});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}if(this.reconcileQueued){this.reconcileQueued=false;queueMicrotask(()=>this.requestReconciliation());}}
+        this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';this.setOperation({state:'running',stage:'running',outcome:null,attempt:0,lastCheck:null,type:null,title:null,entryId:null,recordConfirmed:false});
+        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.activeReceipt=null;this.busy=false;this.cancelled=false;this.diagnosticState='idle';this.setOperation({state:['running','saving','confirming','recovering'].includes(this.operation.state)?this.operation.outcome==='saved'?'saved':'idle':this.operation.state});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}if(this.reconcileQueued){this.reconcileQueued=false;queueMicrotask(()=>this.requestReconciliation());}}
     }
     cancel(reason='cancel-user') {this.cancelled=true;this.cancelReason=reason==='chat-changed'?'chat-changed':'cancel-user';this.host.cancel?.(this.cancelReason);}
     prompt(type) {
@@ -65,7 +65,7 @@ export class Engine {
             if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Выберите их заново.');
             source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
         }
-        this.setOperation({stage:'tokens',type:draft.type,title:draft.title});
+        this.setOperation({stage:'tokens',type:draft.type,title:draft.title,owner:s.key,scope:this.recovery.key(s.key)});
         const preset=this.prompt(draft.type),limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits());
         const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.host.count(`${preset.text}\n\n${source}`),this.policy().tokensTimeout));
         this.assert(s);
@@ -116,18 +116,18 @@ export class Engine {
         archive.owner=s.key;archive.revision=(archive.revision||0)+1;
         s.metadata[KEY]=archive;
         const expected=clone(archive);
-        this.setOperation({state:'saving',stage:'write'});
+        this.setOperation({state:'saving',stage:'write',owner:s.key,scope:this.recovery.key(s.key)});
         const target=archive.pending?.entryId??this.operation.entryId;
-        try{await verifyWrite({write:()=>trace({stage:'save'},()=>this.host.save()),read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),
+        try{const verified=await verifyWrite({write:()=>trace({stage:'save'},()=>this.host.save()),read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),
             exists:disk=>!!target&&!!disk.metadata?.[KEY]?.entries?.some(e=>e.id===target),
             check:disk=>(!target||disk.metadata?.[KEY]?.entries?.some(e=>e.id===target&&e.version===archive.entries.find(x=>x.id===target)?.version))&&sameSavedValue(disk.metadata?.[KEY],expected)&&(!verify||verify(disk)),
             onCheck:check=>this.setOperation({state:'confirming',stage:'confirm',...check}),
-        });}catch(error){if(!archive.pending&&this.activeReceipt?.owner===s.key)archive.pending=clone(this.activeReceipt.archive.pending);this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
+        });if(target&&verified.metadata?.[KEY]?.entries?.some(e=>e.id===target))this.setOperation({recordConfirmed:true});}catch(error){if(!archive.pending&&this.activeReceipt?.owner===s.key)archive.pending=clone(this.activeReceipt.archive.pending);this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
         if(bytes(archive)>WARN_ARCHIVE_BYTES)this.host.notify?.('warning','Архив больше 5 MiB. Рекомендуется экспортировать резервную копию.');
     }
     async refreshAfterSave(s,entry){
         this.setOperation({stage:'tokens'});try{await bounded(()=>this.refreshMemory(),this.policy().tokensTimeout);}catch(error){this.host.report?.(error,{operation:'save-'+entry.type,severity:'warning'});}
-        this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',entryId:entry.id,type:entry.type,title:entry.title});return entry;
+        this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',recordConfirmed:true,entryId:entry.id,type:entry.type,title:entry.title});return entry;
     }
     async pendingReceipt(s){const note=await bounded(()=>this.recovery.get(s.key),this.policy().readTimeout);this.assert(s);return note;}
     requestReconciliation(){if(this.busy){this.reconcileQueued=true;return;}return this.reconcilePending().catch(error=>this.host.report?.(error,{operation:'backup-restore'}));}
@@ -136,12 +136,12 @@ export class Engine {
     makeReceipt(s,archive,operationId,base){const entry=archive.entries.find(e=>e.id===archive.pending.entryId);return {version:1,owner:s.key,operationId,entryId:entry.id,entryVersion:entry.version,base,archive:clone(archive),createdAt:new Date().toISOString()};}
     checkReceiptOwner(archive,note){if(archive.pending&&(archive.pending.entryId!==note.entryId||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(archive.pending.type)||archive.pending.operationId&&archive.pending.operationId!==note.operationId))throw Error('Незавершённая операция отличается от этого результата. Откройте восстановление в настройках; повторный запрос не требуется.');}
     async inspectReceipt(s,note){
-        const expected=note.archive.entries.find(e=>e.id===note.entryId);let disk=null;
-        this.setOperation({state:'recovering',stage:'confirm',type:expected.type,title:expected.title,entryId:expected.id});
-        try{await verifyWrite({write:async()=>{},read:async()=>disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),exists:d=>d.metadata?.[KEY]?.entries?.some(e=>e.id===note.entryId),
+        const expected=note.archive.entries.find(e=>e.id===note.entryId);let disk=null,lastReadFailed=false;
+        this.setOperation({state:'recovering',stage:'confirm',type:expected.type,title:expected.title,entryId:expected.id,owner:s.key,scope:this.recovery.key(s.key)});
+        try{await verifyWrite({write:async()=>{},read:async()=>{lastReadFailed=true;const value=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);lastReadFailed=false;return disk=value;},assert:()=>this.assert(s),policy:this.policy(),exists:d=>d.metadata?.[KEY]?.entries?.some(e=>e.id===note.entryId),
             check:d=>{const a=d.metadata?.[KEY],entry=a?.entries?.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;return sameSavedValue(view(entry),view(expected))&&(!a.pending||a.pending.entryId===note.entryId&&['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(a.pending.type)&&(!a.pending.operationId||a.pending.operationId===note.operationId));},
             onCheck:check=>this.setOperation({stage:'confirm',...check}),
-        });return {status:'saved',disk};}catch(error){this.assert(s);const stored=disk?.metadata?.[KEY],entry=stored?.entries?.find(e=>e.id===note.entryId),status=entry||stored?.pending&&stored.pending.entryId!==note.entryId?'conflict':disk?'missing':'unknown';this.setOperation({state:'waiting',stage:'confirm',outcome:status==='missing'?'missing':'unknown'});return {status,disk,error};}
+        });return {status:'saved',disk};}catch(error){this.assert(s);const stored=disk?.metadata?.[KEY],entry=stored?.entries?.find(e=>e.id===note.entryId),status=lastReadFailed?'unknown':entry||stored?.pending&&stored.pending.entryId!==note.entryId?'conflict':disk?'missing':'unknown';this.setOperation({state:'waiting',stage:'confirm',outcome:status==='missing'?'missing':'unknown'});return {status,disk,error};}
     }
     async finishReceipt(s,note,disk){
         this.checkReceiptOwner(this.archive(s),note);s.metadata[KEY]=clone(disk.metadata[KEY]);this.activeReceipt=note;
@@ -165,7 +165,7 @@ export class Engine {
             this.diagnosticState='saving';const s=draft.session;this.assert(s);
             if(!title?.trim()||!text?.trim())throw Error('Введите название и непустой текст.');
             const archive=clone(this.archive(s)),previousReceipt=await this.pendingReceipt(s);
-            const committed=draft.commitId&&archive.entries.find(e=>e.id===draft.commitId);
+            const committed=draft.commitId&&(archive.entries.find(e=>e.id===draft.commitId)??(previousReceipt?.operationId===draft.operationId?previousReceipt.archive.entries.find(e=>e.id===draft.commitId):null));
             if(committed&&committed.version>=draft.commitVersion){
                 if(committed.version!==draft.commitVersion||committed.type!==draft.type||committed.title!==title||committed.text!==text)throw Error('Этот результат уже записан. Завершите проверку сохранения с прежним текстом; изменения внесите через архив.');
                 if(previousReceipt&&previousReceipt.entryId!==committed.id)throw Error('Предыдущая запись ожидает восстановления. Не сохраняйте её повторно.');
