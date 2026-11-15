@@ -198,8 +198,15 @@ export class UI {
         toggleDrawer(drawer,this.e.settings().ui?.drawerExpanded===true);restoring=false;
     }
     schedule(render=false) {const tab=this.tab,update=render||(this.panel?.open&&['archive','memory'].includes(tab));clearTimeout(this.timer);this.timer=setTimeout(()=>this.refresh(update&&this.tab===tab).catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'})),100);}
-    issue(error,meta={}) {const record=this.e.host.report?.(error,{code:['TypeError','ReferenceError','RangeError','SyntaxError'].includes(error?.name)?'INT-001':'INT-002',stage:'handler',operation:'ui',severity:'error',...meta});const text=record?describeError(record).brief:error?.message??'Не удалось определить причину сбоя.';try{this.showNotice(text);}catch{}return text;}
-    showNotice(text) {const n=this.panel.querySelector('.pv-notice');n.hidden=!text;n.textContent=text;}
+    issue(error,meta={}) {const record=this.e.host.report?.(error,{code:['TypeError','ReferenceError','RangeError','SyntaxError'].includes(error?.name)?'INT-001':'INT-002',stage:'handler',operation:'ui',severity:'error',...meta});const text=record?describeError(record).brief:error?.message??'Не удалось определить причину сбоя.';if(record&&meta.notify!==false&&!this.diagnosticsView?.visible)this.diagnosticsView?.show(record);return text;}
+    collapseErrorViews(entry){
+        if(entry.severity!=='error'&&entry.status!=='blocked'&&this.generationView?.job?.status!=='error')return null;
+        this.diagnosticOperationDismissed=true;this.lastMinimizedOperation=false;this.showNotice('');
+        const job=this.generationView?.job;
+        if(job){job.noticeCovered=true;this.generationView.minimize(job);const reopen=()=>this.generationView.restore(job);reopen.target=job;return reopen;}
+        return this.backupDialog?.isConnected?this.backupDialog.pensieveMinimizeForError?.():null;
+    }
+    showNotice(text) {const n=this.panel?.querySelector('.pv-notice');if(!n)return;n.hidden=!text;n.textContent=text;}
     async act(fn,meta={}) {
         try {const result=await trace(meta,fn);await this.refresh(true);return result;}
         catch(error){this.issue(error);await this.refresh(false).catch(()=>{});return null;}
@@ -221,10 +228,11 @@ export class UI {
         if(!this.restoreDock)return;let op=this.operationSnapshot;
         try{if(op?.scope&&op.scope!==this.e.recovery.key(this.e.key()))op=null;}catch{op=null;}
         const visible=op&&op.state!=='idle',label=visible?operationLabel(op):'Омут памяти';
-        if(visible&&!this.panel.open&&!this.generationView?.job&&['saving','confirming','recovering','waiting','error'].includes(op.state))this.lastMinimizedOperation=true;
+        const failed=visible&&['waiting','error'].includes(op.state);if(visible&&!failed)this.diagnosticOperationDismissed=false;
+        if(visible&&!this.panel.open&&!this.generationView?.job&&!this.diagnosticOperationDismissed&&['saving','confirming','recovering','waiting','error'].includes(op.state))this.lastMinimizedOperation=true;
         this.operationBanner.hidden=!visible;this.operationBanner.textContent=visible?label+(op.lastCheck?` · Последняя проверка: ${new Date(op.lastCheck).toLocaleTimeString()}`:''):'';
         this.restoreButton.querySelector('span').textContent=`Омут памяти · ${label==='Омут памяти'?'':label+' · '}Развернуть`;
-        this.restoreDock.hidden=!!this.generationView?.isMinimized||!(this.windowState==='minimized'||this.lastMinimizedOperation&&visible);
+        this.restoreDock.hidden=this.diagnosticsNoticeActive||failed&&this.diagnosticOperationDismissed||!!this.generationView?.isMinimized||!(this.windowState==='minimized'||this.lastMinimizedOperation&&visible);
         this.restoreDock.setAttribute('aria-busy',String(!!this.e.busy));
     }
     isCurrentSession() {try{if(!this.renderSession)return false;this.e.assert(this.renderSession);return true;}catch{return false;}}
@@ -267,7 +275,7 @@ export class UI {
         const tab=this.tab;
         this.panel.dataset.theme=this.e.settings().theme;
         const memory=snapshot??await this.memorySnapshot();this.lastMemory=memory;try{this.decorateMessages();}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
-        if(memory.blocked&&tab!=='memory'){this.memoryNotice=memory.reason;this.showNotice(memory.reason);}
+        if(memory.blocked&&tab!=='memory'&&!this.diagnosticsView?.visible&&!this.diagnosticOperationDismissed){this.memoryNotice=memory.reason;this.showNotice(memory.reason);}
         else if(this.panel.querySelector('.pv-notice').textContent===this.memoryNotice){this.showNotice('');this.memoryNotice=null;}
         if(render&&this.panel.open&&this.tab===tab)await this.render(memory);
     }
@@ -578,7 +586,8 @@ export class UI {
     }
     restoreBackupDialog(file,session) {
         this.e.assert(session);const {dialog,body}=this.makeDialog('Восстановление памяти',true);dialog.classList.add('pv-backup-dialog');
-        const counts=Object.entries(LEVELS).map(([type,level])=>`${level.plural}: ${file.archive.entries.filter(e=>e.type===type).length}`).join(' · '),current=this.e.archive(session),preview=el('p',{class:'pv-muted'});
+        this.backupDialog=dialog;dialog.pensieveMinimizeForError=()=>{dialog.pensieveRetained=true;if(dialog.open)dialog.close();const reopen=()=>{if(dialog.isConnected&&!dialog.open)dialog.showModal();};reopen.target=dialog;return reopen;};
+        const counts=Object.entries(LEVELS).map(([type,level])=>`${level.plural}: ${file.archive.entries.filter(e=>e.type===type).length}`).join(' · '),preview=el('p',{class:'pv-muted'});
         body.append(el('h3',{},'Найдено: '+counts),preview,el('p',{class:'pv-muted'},'Копия не восстанавливает исходную переписку. Чужие диапазоны останутся историческими сведениями и не будут управлять сообщениями этого чата.'));
         const mode=el('select',{'aria-label':'Способ восстановления'});mode.append(el('option',{value:'merge'},'Объединить с существующими'),el('option',{value:'replace'},'Заменить архив из резервной копии'));body.append(field('Способ восстановления',mode));
         const check=(name,disabled=false)=>{const input=el('input',{type:'checkbox','aria-label':name});input.dataset.unavailable=String(disabled);input.disabled=disabled;const label=el('label');label.append(input,document.createTextNode(name));body.append(label);return input;};
@@ -586,13 +595,13 @@ export class UI {
         body.append(el('p',{class:'pv-muted'},'По умолчанию новые записи останутся в архиве. Активность проверяется по пересечениям и лимиту. Промпты и общие настройки используются и другими чатами — они изменятся только при выбранных флажках.'));
         if(file.source.hadPendingOperation)body.append(el('p',{class:'pv-warning'},'Копия сделана при незавершённой операции. Сначала восстановите её без активности.'));
         const replacement=el('div',{class:'pv-warning',hidden:'true'}),ack=el('input',{type:'checkbox','aria-label':'Подтверждаю замену текущего архива'}),ackLabel=el('label'),exportCurrent=button('Сохранить текущую копию',()=>this.act(()=>{this.e.assert(session);this.exportFullBackup();}));ackLabel.append(ack,document.createTextNode('Подтверждаю замену текущего архива'));replacement.append(el('p',{},'Замена удалит текущие записи из архива этого чата. Сначала можно сохранить их отдельную копию.'),exportCurrent,ackLabel);body.append(replacement);
-        const status=el('p',{role:'status'}),cancel=button('Отмена',()=>{if(!applying)dialog.close();}),close=dialog.querySelector('.pv-header button');body.append(status);let applying=false,planError=false;
+        const status=el('p',{role:'status'}),cancel=button('Отмена',()=>{if(!applying){dialog.pensieveRetained=false;dialog.close();}}),close=dialog.querySelector('.pv-header button');body.append(status);let applying=false,planError=false;
         const save=button('Восстановить память',async()=>{
             if(applying||planError||mode.value==='replace'&&!ack.checked)return;
             const options={mode:mode.value,activate:active.checked,restorePrompts:prompts.checked,restoreSettings:settings.checked};
             applying=true;update();status.textContent='Проверка и восстановление… Дождитесь завершения; окно можно закрыть после результата.';
-            try{this.e.assert(session);const result=await this.e.restoreBackup(file,options,session);dialog.close();this.e.host.notify('success',`Память восстановлена. Новых записей: ${result.added}; уже существовали: ${result.skipped}.`);await this.refresh(true);}
-            catch(error){status.textContent=this.issue(error,{code:'DATA-009',stage:'restore',operation:'backup-restore',severity:'error'});}
+            try{this.e.assert(session);const result=await this.e.restoreBackup(file,options,session);dialog.pensieveRetained=false;dialog.close();this.e.host.notify('success',`Память восстановлена. Новых записей: ${result.added}; уже существовали: ${result.skipped}.`);await this.refresh(true);}
+            catch(error){status.textContent=this.issue(error,{code:'DATA-009',stage:'restore',operation:'backup-restore',severity:'error'});save.textContent='Повторить проверку и восстановить';}
             finally{applying=false;update();}
         },true);
         const update=()=>{
@@ -601,11 +610,11 @@ export class UI {
             for(const control of [active,prompts,settings])control.disabled=applying||control.dataset.unavailable==='true';
         };
         const planMode=()=>{
-            try{const plan=planRestore(current,file,{targetKey:session.key,mode:mode.value,uuid:()=>this.e.host.uuid(),chat:this.e.host.context().chat});preview.textContent=`Новых: ${plan.added} · Уже есть: ${plan.skipped} · Отличаются от текущих: ${plan.conflicts}. При объединении существующие тексты сохраняются.`;planError=false;}
+            try{const plan=planRestore(this.e.archive(session),file,{targetKey:session.key,mode:mode.value,uuid:()=>this.e.host.uuid(),chat:this.e.host.context().chat});preview.textContent=`Новых: ${plan.added} · Уже есть: ${plan.skipped} · Отличаются от текущих: ${plan.conflicts}. При объединении существующие тексты сохраняются.`;planError=false;}
             catch(error){preview.textContent=this.issue(error,{code:'DATA-009',stage:'restore',operation:'backup-restore'});planError=true;}
             update();
         };
-        mode.onchange=planMode;ack.onchange=update;body.append(row(save,cancel));dialog.oncancel=event=>{if(applying)event.preventDefault();};dialog.onclose=()=>dialog.remove();planMode();dialog.showModal();
+        mode.onchange=planMode;ack.onchange=update;body.append(row(save,cancel));dialog.oncancel=event=>{if(applying)event.preventDefault();else dialog.pensieveRetained=false;};dialog.onclose=()=>{if(!dialog.open&&!dialog.pensieveRetained){dialog.remove();this.diagnosticsView?.forgetOperation(dialog);if(this.backupDialog===dialog)this.backupDialog=null;}};planMode();dialog.showModal();
     }
     makeDialog(title,chatScoped=false) {
         const dialog=el('dialog',{class:'pensieve pv-editor','data-theme':this.e.settings().theme});
@@ -630,8 +639,9 @@ export class UI {
         this.generationView??=new GenerationView(this.e,{
             makeDialog:(...args)=>this.makeDialog(...args),preview:draft=>{const done=this.preview(draft);return {done,dialog:this.editor};},
             onSaved:async draft=>{await this.episodeSaved(draft);this.postSaveRefresh();},
+            onError:record=>{if(record)this.diagnosticsView?.show(record);},
             onMinimize:(explicit=true)=>{if(explicit&&this.panel?.open)this.minimize();if(this.restoreDock&&this.windowState==='minimized')this.restoreDock.hidden=true;},
-            onClear:job=>{this.lastMinimizedOperation=!!job.windowHidden;this.syncOperationDock();},
+            onClear:job=>{this.diagnosticsView?.forgetOperation(job);this.lastMinimizedOperation=!!job.windowHidden;this.syncOperationDock();},
         });
         return this.generationView.generate(fn,options);
     }

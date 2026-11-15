@@ -2,7 +2,7 @@ import {Engine} from './src/engine.js';
 import {createHost,verifyHost} from './src/host.js';
 import {UI} from './src/ui.js';
 import {installMemoryEcho} from './src/memory-echo.js';
-import {Diagnostics,tagError,describeError,trace} from './src/diagnostics.js';
+import {Diagnostics,tagError,trace} from './src/diagnostics.js';
 import {DiagnosticsView,setErrorSink} from './src/diagnostics-view.js';
 import {SaveJournal,nativeRecoveryStorage} from './src/save-recovery.js';
 const runtime=globalThis[Symbol.for('sillytavern.pensieve.runtime')]??={};
@@ -25,7 +25,8 @@ export function boot(){
             }catch(error){abort(true);if(echo)await echo.fail(error);else{diagnostics.report(error,{operation:'context',status:'blocked'});try{context().stopGeneration();}catch(failure){diagnostics.report(failure,{code:'INT-004',stage:'unlock',notify:false});}}}
         };
         const ui=new UI(engine);ui.diagnosticsView=view;
-        try{echo=await trace({code:'MEM-011',stage:'registration',operation:'startup'},()=>installMemoryEcho(engine,{onError:(_error,record)=>{if(record)ui.showNotice(describeError(record).brief);}}));}
+        view.onNotice=entry=>ui.collapseErrorViews(entry);view.onVisibility=visible=>{ui.diagnosticsNoticeActive=visible;ui.syncOperationDock();};
+        try{echo=await trace({code:'MEM-011',stage:'registration',operation:'startup'},()=>installMemoryEcho(engine));}
         catch(error){diagnostics.report(error,{code:'MEM-011',stage:'registration',operation:'startup'});}
         context().eventSource.on(context().eventTypes.CHAT_CHANGED,()=>engine.requestReconciliation());
         engine.requestReconciliation();

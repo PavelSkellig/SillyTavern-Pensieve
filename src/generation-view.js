@@ -21,8 +21,8 @@ const button=(text,action)=>{const n=node('button','',text);n.type='button';n.ad
 
 /** Presentation of one existing engine operation. Hiding never owns request cancellation. */
 export class GenerationView {
-    constructor(engine,{makeDialog,preview,onSaved,onMinimize=()=>{},onClear=()=>{}}) {
-        Object.assign(this,{engine,makeDialog,preview,onSaved,onMinimize,onClear});this.job=null;
+    constructor(engine,{makeDialog,preview,onSaved,onMinimize=()=>{},onClear=()=>{},onError=()=>{}}) {
+        Object.assign(this,{engine,makeDialog,preview,onSaved,onMinimize,onClear,onError});this.job=null;
         this.unsubscribe=engine.subscribeOperation?.(op=>{if(this.job){this.job.operation=op;this.paint(this.job);}});
     }
     get isMinimized(){return !!this.job?.windowHidden;}
@@ -58,15 +58,16 @@ export class GenerationView {
         job.message.textContent=job.operation&&['running','saving','confirming','recovering','waiting'].includes(job.operation.state)?operationLabel(job.operation):saving?'Результат получен. Проверяется сохранение на сервере…':'Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.';
         job.retry.hidden=!error;job.retry.disabled=!error;job.retry.textContent=job.phase==='save'?'Повторить сохранение':job.phase==='preview'?'Показать результат повторно':'Повторить запрос';job.cancel.textContent=error?'Закрыть':'Отменить генерацию';job.cancel.disabled=saving;job.close.disabled=saving;
         const label=labels[job.type],op=job.operation;const title=job.status==='ready'?label.ready:op&&['running','saving','confirming','recovering','waiting','error','saved'].includes(op.state)?operationLabel(op):error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Сохраняется '+label.making:'Создаётся '+label.making;
-        this.dock.replaceChildren(button(`Омут памяти · ${title} · Развернуть`,()=>this.restore(job)));this.dock.hidden=!job.windowHidden;this.dock.setAttribute('aria-busy',String(!!this.engine.busy));
+        this.dock.replaceChildren(button(`Омут памяти · ${title} · Развернуть`,()=>this.restore(job)));this.dock.hidden=!job.windowHidden||!!job.noticeCovered;this.dock.setAttribute('aria-busy',String(!!this.engine.busy));
     }
     minimize(job) {
-        if(this.job!==job||!['running','saving','error','preview'].includes(job.status))return;
+        if(this.job!==job||!['running','saving','ready','error','preview'].includes(job.status))return;
         job.minimized=true;job.windowHidden=true;const dialog=job.previewDialog?.isConnected?job.previewDialog:job.dialog;
         if(dialog.open){if(dialog===job.previewDialog)dialog.pensieveMinimizeClosures=(dialog.pensieveMinimizeClosures??0)+1;dialog.close();}this.onMinimize();this.paint(job);
     }
     restore(job) {
         if(!this.current(job)||!['running','saving','ready','error','preview'].includes(job.status))return;
+        job.noticeCovered=false;
         if(job.previewDialog?.isConnected){job.minimized=false;job.windowHidden=false;this.paint(job);if(!job.previewDialog.open)job.previewDialog.showModal();return;}
         if(job.status==='ready'){this.showPreview(job);return;}
         job.minimized=false;job.windowHidden=false;this.update(job);if(!job.dialog.open)job.dialog.showModal();
@@ -100,7 +101,7 @@ export class GenerationView {
         job.status=job.phase==='save'?'saving':'running';job.errorMessage='';this.paint(job);
         try {
             this.assert(job);
-            if(job.phase==='generate')job.draft=await job.fn();
+            job.noticeCovered=false;if(job.phase==='generate')job.draft=await job.fn();
             if(!this.current(job))return null;
             this.assert(job);const draft=job.draft;job.type=draft.type;
             if(job.phase==='save'||draft.type==='summary'&&!this.engine.settings().previewEpisodes){
@@ -115,12 +116,12 @@ export class GenerationView {
             return draft;
         }catch(error){
             if(!this.current(job))return null;
-            const presentation=job.phase==='preview',record=this.engine.host.report?.(error,presentation?{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}:{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);this.paint(job);if(presentation){try{if(!job.minimized&&!job.dialog?.open)job.dialog?.showModal();}catch{}return job.draft;}throw error;
+            const presentation=job.phase==='preview',record=this.engine.host.report?.(error,presentation?{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}:{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);this.onError(record);this.minimize(job);this.paint(job);if(presentation)return job.draft;throw error;
         }
     }
     showPreview(job) {
         if(!this.current(job)||job.status!=='ready')return;
-        try{this.assert(job);}catch(error){const record=this.engine.host.report?.(error,{operation:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error.message;this.restore(job);return;}
+        try{this.assert(job);}catch(error){const record=this.engine.host.report?.(error,{operation:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error.message;this.onError(record);this.minimize(job);return;}
         job.status='preview';job.minimized=false;job.windowHidden=false;this.dock.hidden=true;
         if(job.dialog.open)job.dialog.close();
         const {done,dialog}=this.preview(job.draft);job.previewDialog=dialog;job.dialog.remove();

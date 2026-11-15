@@ -11,7 +11,7 @@ export async function copyDiagnostics(text){
     finally{area.remove();try{active?.focus?.({preventScroll:true});}catch{}}
 }
 export class DiagnosticsView {
-    constructor(service){this.service=service;this.settingsOpen=false;this.journalOpen=false;this.unsubscribe=service.subscribe((entry,meta)=>{if(entry&&meta.notify)this.show(entry);else if(!entry)this.hide();this.refreshSettings();});this.watchOwnErrors();}
+    constructor(service){this.service=service;this.settingsOpen=false;this.journalOpen=false;this.operationActions=new Map();this.unsubscribe=service.subscribe((entry,meta)=>{if(entry&&meta.notify)this.show(entry);else if(!entry)this.hide();this.refreshSettings();});this.watchOwnErrors();}
     watchOwnErrors(){
         const base=new URL('./',import.meta.url).pathname;
         const ours=(event,error)=>typeof event.filename==='string'&&event.filename.includes(base)||typeof error?.stack==='string'&&error.stack.split('\n').slice(1).some(line=>line.includes(base));
@@ -21,17 +21,22 @@ export class DiagnosticsView {
         if(this.notice?.isConnected)return this.notice;
         const n=node('section',{id:'pensieve-diagnostics-notice','aria-live':'polite','aria-label':'Уведомление Омута памяти'});n.hidden=true;const composer=document.getElementById('send_form');if(composer)composer.before(n);else document.body?.append(n);this.notice=n;return n;
     }
-    hide(){clearTimeout(this.timer);if(this.notice){this.notice.hidden=true;this.notice.replaceChildren();}}
+    get visible(){return !!this.notice?.isConnected&&!this.notice.hidden;}
+    forgetOperation(target){for(const [id,action]of this.operationActions)if(action.target===target)this.operationActions.delete(id);}
+    hide(){clearTimeout(this.timer);if(this.notice){this.notice.hidden=true;this.notice.replaceChildren();}this.onVisibility?.(false);}
     show(entry){
         const n=this.noticeRoot(),d=describeError(entry);if(!d)return;n.replaceChildren();n.hidden=false;n.dataset.severity=entry.severity;n.dataset.errorCode=entry.code;
-        n.append(node('strong',{},entry.severity==='error'?'Омут памяти — ошибка':entry.severity==='warning'?'Омут памяти — предупреждение':'Омут памяти — уведомление'),node('p',{},d.title),node('small',{},`Код: ${entry.code} · Этап: ${d.stage}`));
-        const expanded=node('div',{class:'pv-diag-expanded'});expanded.hidden=true;expanded.append(...this.details(entry));
-        const detail=button('Подробности',()=>{expanded.hidden=!expanded.hidden;detail.setAttribute('aria-expanded',String(!expanded.hidden));if(!expanded.hidden)clearTimeout(this.timer);});detail.setAttribute('aria-expanded','false');
-        const actions=node('div',{class:'pv-diag-actions'}),status=node('p',{'role':'status',class:'pv-diag-copy-status'});actions.append(detail,button('Копировать диагностику',()=>this.copy(this.service.reportText([entry]),status,expanded)));n.append(actions,expanded,status);
-        clearTimeout(this.timer);this.timer=setTimeout(()=>{if(expanded.hidden)this.hide();},18000);
+        clearTimeout(this.timer);const reopen=this.onNotice?.(entry);if(reopen){this.operationActions.set(entry.id,reopen);while(this.operationActions.size>20)this.operationActions.delete(this.operationActions.keys().next().value);}
+        const compact=node('div',{class:'pv-diag-compact'}),expanded=node('div',{class:'pv-diag-expanded'});expanded.hidden=true;
+        const setExpanded=value=>{compact.hidden=value;expanded.hidden=!value;n.dataset.expanded=String(value);};
+        const detail=button(`Омут памяти · ${entry.code} · ${d.title}`,()=>setExpanded(true));detail.className='pv-diag-toggle';detail.setAttribute('aria-label','Развернуть уведомление: '+d.title);detail.setAttribute('aria-expanded','false');
+        const arrow=button('⌄',()=>setExpanded(true));arrow.setAttribute('aria-label','Развернуть уведомление');
+        const close=()=>this.hide(),closeButton=()=>{const b=button('×',close);b.setAttribute('aria-label','Закрыть уведомление');return b;};compact.append(detail,arrow,closeButton());
+        const heading=node('div',{class:'pv-diag-heading'}),collapse=button('Свернуть',()=>setExpanded(false));collapse.setAttribute('aria-expanded','true');heading.append(node('strong',{},'Омут памяти · '+entry.code),collapse,closeButton());
+        const status=node('p',{'role':'status',class:'pv-diag-copy-status'});expanded.append(heading,node('p',{},d.title),...this.details(entry),button('Копировать диагностику',()=>this.copy(this.service.reportText([entry]),status,expanded)),status);n.append(compact,expanded);setExpanded(false);this.onVisibility?.(true);
     }
     details(entry){
-        const d=describeError(entry),status={error:'ошибка',blocked:'запрос остановлен',canceled:'отменена',warning:'предупреждение'}[entry.status];return [node('p',{},`Код: ${entry.code} · Операция: ${d.operation}`),node('p',{},`Этап: ${d.stage} · Статус: ${status} · Повторений: ${entry.repeats}`),node('p',{},`Причина: ${d.reason}`),node('p',{},`Что делать: ${d.action}`),node('pre',{},`Техническое сообщение: ${d.technical}\nСтек:\n${d.stack}`)];
+        const d=describeError(entry),status={error:'ошибка',blocked:'запрос остановлен',canceled:'отменена',warning:'предупреждение'}[entry.status],parts=[node('p',{},`Код: ${entry.code} · Операция: ${d.operation}`),node('p',{},`Этап: ${d.stage} · Статус: ${status} · Повторений: ${entry.repeats}`),node('p',{},`Причина: ${d.reason}`),node('p',{},`Что делать: ${d.action}`)];if(d.recovery)parts.push(node('pre',{},d.recovery));parts.push(node('pre',{},`Техническое сообщение: ${d.technical}\nСтек:\n${d.stack}`));const reopen=this.operationActions.get(entry.id);if(reopen)parts.push(button('Вернуться к операции',()=>{this.hide();reopen();}));return parts;
     }
     async copy(text,status,container){
         try{await copyDiagnostics(text);status.textContent='Диагностика скопирована.';}

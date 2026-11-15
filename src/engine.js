@@ -413,23 +413,74 @@ export class Engine {
         if(patch.settings)Object.assign(validated,validateBackupSettings(patch.settings));
         if(patch.prompts)validated.prompts=validatePromptGroups(patch.prompts);
         if(typeof this.host.saveSettings!=='function')throw Error('Не удалось проверить сохранение общих настроек. Обновите SillyTavern и повторите восстановление.');
-        Object.assign(this.settings(),clone(validated));await this.host.saveSettings(validated);this.assert(s);
+        Object.assign(this.settings(),clone(validated));await bounded(()=>this.host.saveSettings(validated),this.policy().saveTimeout);this.assert(s);
+    }
+    backupBlocked(reason,error=null){
+        const state=this.backupRecoveryStatus??={kind:'none',operationId:null,stage:'confirm',checked:false,outcome:'unknown'};
+        state.reason=reason;state.action=reason==='unsettled'?'wait':reason==='conflict'?'inspect':'retry';
+        this.setOperation({state:'waiting',stage:'confirm',outcome:state.outcome==='missing'?'missing':'unknown'});
+        return tagError(Error('Восстановление копии приостановлено безопасно. Повторите проверку; незавершённые данные и файл копии сохранены.',error?{cause:error}:undefined),{code:'DATA-009',stage:'restore',operation:'backup-restore',reason:'pending',backupRecovery:clone(state)});
+    }
+    async prepareBackupRestore(s){
+        const pending=this.archive(s).pending;
+        let recoveryArchive=null;
+        this.backupRecoveryStatus={kind:pending?.type??'none',operationId:pending?.operationId??pending?.entryId??null,stage:pending?.type==='hide'?'sources':'confirm',checked:false,outcome:'unknown',reason:'unknown',action:'retry'};
+        try{
+            let note=await this.pendingReceipt(s);
+            if(note||['hide','commit'].includes(pending?.type)){
+                if(!note){const copy=clone(this.archive(s)),operationId=copy.pending.operationId??this.host.uuid();copy.pending.operationId=operationId;note=await this.keepReceipt(s,this.makeReceipt(s,copy,operationId,'legacy'));}
+                Object.assign(this.backupRecoveryStatus,{kind:note.intent==='restore'?'restore':note.archive.pending.type,operationId:note.operationId});
+                this.checkReceiptOwner(this.archive(s),note);const checked=await this.inspectReceipt(s,note);
+                Object.assign(this.backupRecoveryStatus,{checked:!!checked.disk&&errorMeta(checked.error).readAccepted!==false,outcome:checked.status});
+                if(!['saved','missing'].includes(checked.status))throw this.backupBlocked(checked.status==='conflict'?'conflict':'unknown',checked.error);
+                // An explicit backup restore may preserve a missing paid result as an inactive archive entry.
+                await this.resumeReceipt(s,note,checked,checked.status==='missing'||note.intent==='restore');
+                if(await this.pendingReceipt(s))throw this.backupBlocked('unsettled');
+                this.activeReceipt=null;this.saveGuard=null;
+                if(checked.status==='missing')this.host.notify?.('info','Незавершённый результат сохранён в архив без активности. Продолжаю восстановление копии.');
+            }else if(pending){
+                const disk=await bounded(()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),this.policy().readTimeout);this.assert(s);this.backupRecoveryStatus.checked=true;
+                if(this.nativeWrites.has(this.recovery.key(s.key)))throw this.backupBlocked('unsettled');
+                const stored=disk.metadata?.[KEY];
+                if(!['backup','restore'].includes(pending.type)||!sameSavedValue(archiveBody(stored),archiveBody(this.archive(s)))||!sameSavedValue(disk.messages,s.chat)||stored?.pending&&!sameSavedValue(stored.pending,pending))throw this.backupBlocked('conflict');
+                this.backupRecoveryStatus.outcome='saved';
+                if(pending.type==='backup'&&stored.pending){
+                    const desired={...pending.globals?.settings,...(pending.globals?.prompts?{prompts:pending.globals.prompts}:{})},previous={...pending.previousGlobals?.settings,...(pending.previousGlobals?.prompts?{prompts:pending.previousGlobals.prompts}:{})},settings=this.settings();
+                    if(Object.keys(desired).some(key=>!sameSavedValue(settings[key],desired[key])&&!sameSavedValue(settings[key],previous[key])))throw this.backupBlocked('conflict');
+                }
+                s.metadata[KEY]=clone(stored);recoveryArchive=s.metadata[KEY];
+                if(pending.type==='restore'){
+                    const entry=this.archive(s).entries.find(e=>e.id===pending.entryId);if(!entry)throw this.backupBlocked('conflict');
+                    await this.restoreInternal(s,entry);
+                }else if(stored.pending)await this.completePending(s);
+            }
+            if(this.nativeWrites.has(this.recovery.key(s.key)))throw this.backupBlocked('unsettled');
+            if(this.archive(s).pending)throw this.backupBlocked('unknown');
+        }catch(error){try{this.assert(s);if(recoveryArchive&&s.metadata[KEY]===recoveryArchive&&!recoveryArchive.pending)recoveryArchive.pending=clone(pending);}catch{}if(errorMeta(error).backupRecovery)throw error;throw this.backupBlocked(this.nativeWrites.has(this.recovery.key(s.key))?'unsettled':'unknown',error);}
+    }
+    async backupBaseline(s){
+        let disk;try{disk=await bounded(()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),this.policy().readTimeout);this.assert(s);}catch(error){throw this.backupBlocked('unknown',error);}
+        this.backupRecoveryStatus.checked=true;
+        if(!sameSavedValue(disk.metadata?.[KEY]??null,s.metadata[KEY]??null)||!sameSavedValue(disk.messages,s.chat))throw this.backupBlocked('conflict');
+        return clone(disk);
     }
     async restoreBackup(backup,options={},session=null) {
         return this.run(async()=>{
             const s=session??this.session();this.assert(s);
             const file=backup?.legacy?parseBackup(JSON.stringify({format:'pensieve',version:1,archive:backup.archive})):parseBackup(JSON.stringify(backup));
             if(backup?.source?.hadPendingOperation)file.source.hadPendingOperation=true;
-            const mode=options.mode??'merge',current=this.archive(s),settings=this.settings();
-            if(current.pending)throw Error('Сначала завершите незавершённую операцию памяти.');
-            if(mode==='replace'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.length))throw Error('Перед заменой архива восстановите собственные исключения сообщений. Объединение доступно без этого.');
+            const mode=options.mode??'merge';if(!['merge','replace'].includes(mode))throw Error('Неизвестный способ восстановления.');
             if(options.restorePrompts&&!file.prompts||options.restoreSettings&&!file.settings)throw Error('В этой прежней копии нет выбранных промптов или настроек.');
+            await this.prepareBackupRestore(s);
+            const current=this.archive(s),settings=this.settings();
+            if(mode==='replace'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.length))throw Error('Перед заменой архива восстановите собственные исключения сообщений. Объединение доступно без этого.');
+            this.activeReceipt=null;this.saveGuard=null;this.setOperation({state:'recovering',stage:'confirm',type:null,title:null,entryId:null,recordConfirmed:false});
             const restoredPrompts=options.restorePrompts?mergePromptGroups(settings.prompts,validatePromptGroups(file.prompts)):clone(settings.prompts);
             const candidateSettings={...clone(settings),...(options.restoreSettings?validateBackupSettings(file.settings):{}),prompts:restoredPrompts};
-            const stamp=JSON.stringify([s.metadata[KEY]??null,settings]),previousArchive=s.metadata[KEY],hadArchive=Object.hasOwn(s.metadata,KEY);
+            const baseline=await this.backupBaseline(s),stamp=JSON.stringify([s.metadata[KEY]??null,settings]),previousArchive=clone(s.metadata[KEY]),hadArchive=Object.hasOwn(s.metadata,KEY);
             const plan=planRestore(current,file,{targetKey:s.key,mode,activate:options.activate===true,uuid:()=>this.host.uuid(),chat:s.chat});
             if(options.activate){
-                const ordered=narrativeOrder(memoryEntries(plan.archive.entries),plan.archive.entries,s.chat),text=memoryText(plan.archive.entries,candidateSettings,ordered.entries),tokens=await this.host.count(text);this.assert(s);
+                const ordered=narrativeOrder(memoryEntries(plan.archive.entries),plan.archive.entries,s.chat),text=memoryText(plan.archive.entries,candidateSettings,ordered.entries),tokens=await bounded(()=>this.host.count(text),this.policy().tokensTimeout);this.assert(s);
                 const limits=this.host.limits();if(memoryConflicts(plan.archive.entries,s.key).length)throw Error('Восстановление активности создаёт пересечения памяти. Восстановите записи без активности.');
                 if(importedSourceConflicts(plan.archive.entries,s.chat).length)throw Error('В текущем чате уже есть исходные сообщения копии. Восстановите без активности или сначала вручную исключите эти сообщения штатными средствами SillyTavern.');
                 if(!Number.isFinite(tokens)||tokens>candidateSettings.tokenLimit||text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context))throw Error('Активная копия превышает лимит токенов или контекст модели. Восстановите без активности либо измените лимит.');
@@ -437,26 +488,35 @@ export class Engine {
             this.assert(s);if(stamp!==JSON.stringify([s.metadata[KEY]??null,settings]))throw Error('Память или настройки изменились во время проверки. Повторите восстановление.');
             // A durable marker blocks all injection until both complete-archive writes verify.
             const globals={...(options.restoreSettings?{settings:clone(file.settings)}:{}),...(options.restorePrompts?{prompts:clone(restoredPrompts)}:{})},previousGlobals={...(options.restoreSettings?{settings:validateBackupSettings(settings)}:{}),...(options.restorePrompts?{prompts:clone(settings.prompts)}:{})};
-            plan.archive.pending={type:'backup',globals,previousGlobals};
+            const operationId=this.host.uuid();plan.archive.pending={type:'backup',operationId,globals,previousGlobals};
+            const candidateBody=clone(archiveBody(plan.archive));this.backupRecoveryStatus={kind:'backup',operationId,stage:'write',checked:true,outcome:'unknown',reason:'unknown',action:'retry'};
             let globalsApplied=false;this.restoring=true;
             try{
                 this.host.inject('');await this.persist(s,plan.archive);
                 if(Object.keys(globals).length){globalsApplied=true;await this.saveBackupGlobals(s,globals);}
                 plan.archive.pending=null;await this.persist(s,plan.archive);this.assert(s);
-                this.restoring=false;await this.refreshMemory();return plan;
+                this.restoring=false;this.setOperation({state:'saved',stage:'saved',outcome:'saved'});bounded(()=>this.refreshMemory(),this.policy().tokensTimeout).catch(error=>this.host.report?.(error,{code:'MEM-005',stage:'tokens',severity:'warning'}));return plan;
             }catch(error){
-                if(hadArchive)s.metadata[KEY]=previousArchive;else delete s.metadata[KEY];
+                // Never start a rollback over a still-running native writer or a newer chat/archive.
+                let rollbackAllowed=false;
+                if(!this.nativeWrites.has(this.recovery.key(s.key)))try{
+                    const disk=await bounded(()=>this.host.read(),this.policy().readTimeout);this.assert(s);
+                    rollbackAllowed=sameSavedValue(s.chat,baseline.messages)&&sameSavedValue(disk.messages,baseline.messages)&&sameSavedValue(archiveBody(s.metadata[KEY]),candidateBody)&&(sameSavedValue(archiveBody(disk.metadata?.[KEY]),candidateBody)||sameSavedValue(disk.metadata?.[KEY]??null,previousArchive??null));
+                }catch{}
+                if(!rollbackAllowed){if(s.metadata[KEY]===plan.archive&&sameSavedValue(archiveBody(plan.archive),candidateBody))plan.archive.pending={type:'backup',operationId,globals,previousGlobals};this.restoring=false;throw this.backupBlocked(this.nativeWrites.has(this.recovery.key(s.key))?'unsettled':'conflict',error);}
+                if(hadArchive)s.metadata[KEY]=clone(previousArchive);else delete s.metadata[KEY];
                 let globalsRollback=!globalsApplied;
                 if(globalsApplied){
                     const desired={...globals.settings,...(globals.prompts?{prompts:globals.prompts}:{})},previous={...previousGlobals.settings,...(previousGlobals.prompts?{prompts:previousGlobals.prompts}:{})};
                     // Preserve any newer user edit instead of overwriting it during a late rollback.
                     if(Object.keys(desired).every(key=>JSON.stringify(settings[key])===JSON.stringify(desired[key]))){Object.assign(settings,clone(previous));try{await this.saveBackupGlobals(s,previousGlobals);globalsRollback=true;}catch{}}
                 }
-                let rollback=false;try{this.assert(s);await trace({stage:'save'},()=>this.host.save());this.assert(s);const disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);rollback=JSON.stringify(disk.metadata?.[KEY])===JSON.stringify(previousArchive);}catch{}
-                this.restoring=false;try{this.assert(s);await this.refreshMemory();}catch{}
-                throw tagError(Error(error.message+(rollback&&globalsRollback?' Предыдущее состояние восстановлено.':' Восстановление не подтверждено. Локальное состояние возвращено; проверьте архив и настройки после подключения. Незавершённая копия не внедряется до проверки.'),{cause:error}),errorMeta(error));
+                let rollback=false;try{this.assert(s);const task=this.trackedWrite(s,previousArchive??emptyArchive(s.key),'save',()=>trace({stage:'save'},()=>this.host.save()));await verifyWrite({write:task.run,onWriteTimeout:()=>task.timedOut=true,read:()=>this.host.read(),assert:()=>this.assert(s),policy:this.policy(),check:disk=>sameSavedValue(disk.metadata?.[KEY]??null,previousArchive??null)&&sameSavedValue(disk.messages,baseline.messages)});rollback=task.settled;}catch{}
+                this.restoring=false;bounded(()=>this.refreshMemory(),this.policy().tokensTimeout).catch(()=>{});
+                Object.assign(this.backupRecoveryStatus,{stage:'rollback',checked:rollback,outcome:rollback&&globalsRollback?'missing':'unknown',reason:rollback&&globalsRollback?'rolled-back':'unknown',action:'retry'});
+                throw tagError(Error(rollback&&globalsRollback?'Восстановление копии не завершено. Предыдущее состояние подтверждено; можно повторить попытку.':'Откат не подтверждён. Повторите проверку перед восстановлением; файл копии сохранён.',{cause:error}),{code:'DATA-009',stage:'restore',operation:'backup-restore',reason:'pending',backupRecovery:clone(this.backupRecoveryStatus)});
             }
-        });
+        },{allowOutstanding:true});
     }
     async memory() {
         const s=trace({code:'MEM-001',stage:'chat'},()=>this.session()),settings=this.settings(),entries=trace({code:'MEM-002',stage:'active'},()=>this.archive(s).entries),archive=this.archive(s);

@@ -445,7 +445,13 @@
 #pensieve-panel .pv-preset-toolbar{display:grid;gap:8px;min-width:0;width:100%;box-sizing:border-box}#pensieve-panel .pv-preset-toolbar>label{min-width:0}#pensieve-panel .pv-preset-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}#pensieve-panel .pv-preset-actions button{min-width:0;width:100%;padding:7px 5px;white-space:normal;overflow-wrap:normal;word-break:normal}#pensieve-panel .pv-preset-more{margin-top:8px}#pensieve-panel .pv-preset-more>.pv-row{margin-top:8px}
 
 /* Diagnostics is in normal composer flow, never a chat-covering error modal. */
-#pensieve-diagnostics-notice{box-sizing:border-box;width:100%;min-width:0;max-height:28dvh;overflow:auto;flex:none;background:#14243D;color:#F0E8DC;border:1px solid #B79C73;border-radius:8px;padding:8px;font-size:12px;text-align:left}
+#pensieve-diagnostics-notice{box-sizing:border-box;width:100%;min-width:0;max-height:min(34dvh,280px);overflow:auto;flex:none;background:#14243D;color:#F0E8DC;border:1px solid #B79C73;border-radius:8px;padding:4px;font-size:12px;text-align:left}
+#pensieve-diagnostics-notice .pv-diag-compact{display:grid;grid-template-columns:minmax(0,1fr) 36px 36px;gap:4px;align-items:center;min-width:0}
+#pensieve-diagnostics-notice .pv-diag-compact[hidden]{display:none!important}
+#pensieve-diagnostics-notice .pv-diag-toggle{display:block;min-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:normal;text-align:left}
+#pensieve-diagnostics-notice .pv-diag-heading{display:grid;grid-template-columns:minmax(0,1fr) auto 36px;gap:4px;align-items:center;min-width:0}
+#pensieve-diagnostics-notice .pv-diag-heading strong{min-width:0;overflow-wrap:anywhere}
+#pensieve-diagnostics-notice .pv-diag-expanded{padding:3px;min-width:0;overflow-wrap:anywhere}
 #pensieve-diagnostics-notice[hidden],.pv-diag-expanded[hidden],.pv-diag-journal[hidden]{display:none!important}
 #pensieve-diagnostics-notice p{margin:4px 0}#pensieve-diagnostics-notice small{display:block;color:#d2c2aa}
 #pensieve-diagnostics-notice[data-severity="warning"]{border-color:#88734f}#pensieve-diagnostics-notice[data-severity="info"]{border-color:#596c83}
