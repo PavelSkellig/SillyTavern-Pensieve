@@ -253,7 +253,7 @@ test('restored active memory cannot duplicate unhidden source messages already p
 });
 
 for(const exclude of [false,true])test(`retry after final readback failure reuses the same draft commit, Hide=${exclude}`,async()=>{
- const f=fixture();f.e.settings().exclude=exclude;const d=await f.e.generateSummary(1,2),native=f.host.read;let reads=0;const final=exclude?4:3;f.host.read=async()=>{if(++reads===final)throw Error('Final read failed');return native();};
+ const f=fixture();f.e.settings().exclude=exclude;const d=await f.e.generateSummary(1,2),native=f.host.read;let reads=0;const final=exclude?4:3;f.host.read=async()=>{if(++reads>=final)throw Error('Final read failed');return native();};
  await assert.rejects(()=>f.e.saveDraft(d,{title:'One',text:d.text}));assert.equal(f.e.archive().pending,null);const id=f.e.archive().entries[0].id;f.host.read=native;const entry=await f.e.saveDraft(d,{title:'One',text:d.text});assert.equal(f.e.archive().entries.length,1);assert.equal(entry.id,id);assert.equal(entry.version,1);assert.equal(f.e.archive().entries.filter(e=>e.active).length,1);
 });
 test('full restore rejects malformed nested record versions before any write',async()=>{

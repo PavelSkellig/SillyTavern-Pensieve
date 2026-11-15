@@ -7,9 +7,13 @@ import {childrenIds,hierarchyIndex,LEVELS,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
 import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
+import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp} from './save-recovery.js';
 
 export class Engine {
-    constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';host.setEngine?.(this);}
+    constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();host.setEngine?.(this);}
+    subscribeOperation(listener){this.operationListeners.add(listener);return()=>this.operationListeners.delete(listener);}
+    setOperation(patch){Object.assign(this.operation,patch);for(const listener of this.operationListeners)try{listener({...this.operation});}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
+    policy(){return {...SAVE_POLICY,...this.host.savePolicy};}
     settings() {
         const c=this.host.context();
         c.extensionSettings[KEY]??=defaults();const settings=c.extensionSettings[KEY];
@@ -35,8 +39,8 @@ export class Engine {
     archive(s=this.session()) {return s.metadata[KEY]??emptyArchive(s.key);}
     async run(fn) {
         if(this.busy)throw tagError(Error('Другая операция уже выполняется. Дождитесь её завершения.'),{code:'INT-003',stage:'handler',reason:'busy'});
-        this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';
-        try{return await fn();}catch(error){throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.busy=false;this.cancelled=false;this.diagnosticState='idle';try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
+        this.busy=true;this.cancelled=false;this.cancelReason='cancel-user';this.diagnosticState='running';this.setOperation({state:'running',stage:'running',outcome:null,attempt:0,lastCheck:null,type:null,title:null,entryId:null});
+        try{return await fn();}catch(error){if(this.operation.state!=='waiting')this.setOperation({state:this.cancelled?'canceled':'error'});throw tagError(error,{snapshot:{generation:this.diagnosticState}});}finally{this.busy=false;this.cancelled=false;this.diagnosticState='idle';if(['running','saving','confirming','recovering'].includes(this.operation.state))this.setOperation({state:this.operation.outcome==='saved'?'saved':'idle'});try{this.host.refresh?.();}catch(error){this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}}
     }
     cancel(reason='cancel-user') {this.cancelled=true;this.cancelReason=reason==='chat-changed'?'chat-changed':'cancel-user';this.host.cancel?.(this.cancelReason);}
     prompt(type) {
@@ -61,14 +65,16 @@ export class Engine {
             if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Выберите их заново.');
             source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
         }
+        this.setOperation({stage:'tokens',type:draft.type,title:draft.title});
         const preset=this.prompt(draft.type),limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits());
-        const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>this.host.count(`${preset.text}\n\n${source}`));
+        const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.host.count(`${preset.text}\n\n${source}`),this.policy().tokensTimeout));
         this.assert(s);
         if(this.cancelled)throw tagError(Error('Генерация отменена до отправки запроса.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
         if(!Number.isFinite(tokens)||!Number.isFinite(limits.context)||!Number.isFinite(limits.output))throw tagError(Error('Не удалось проверить лимит контекста модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
         if(tokens+limits.output+256>limits.context)throw tagError(Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число записей либо увеличьте контекст в SillyTavern. Ничего не обрезано.`),{code:'MEM-005',stage:'tokens',reason:'context-local'});
         const unlock=this.host.lock?.();
         try {
+            this.setOperation({stage:'api'});
             const text=await trace({code:'GEN-001',stage:'api',operation:'generate-'+draft.type,snapshot:{macroUsed:false,generation:'running'}},()=>this.host.generate(preset.text,source));
             this.assert(s);
             if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
@@ -109,10 +115,18 @@ export class Engine {
         archive.owner=s.key;archive.revision=(archive.revision||0)+1;
         s.metadata[KEY]=archive;
         const expected=JSON.stringify(archive);
-        await trace({stage:'save'},()=>this.host.save());this.assert(s);
-        const disk=await trace({code:'DATA-005',stage:'read'},()=>this.host.read());this.assert(s);
-        if(JSON.stringify(disk.metadata?.[KEY])!==expected||verify&&!verify(disk))throw tagError(Error('Не удалось подтвердить сохранение на сервере. Источники не будут исключены без проверки. Проверьте соединение и используйте «Повторить сохранение / восстановление».'),{stage:'save',reason:'save-unconfirmed'});
+        this.setOperation({state:'saving',stage:'write'});
+        const target=archive.pending?.entryId??this.operation.entryId;
+        try{await verifyWrite({write:()=>trace({stage:'save'},()=>this.host.save()),read:()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),assert:()=>this.assert(s),policy:this.policy(),
+            exists:disk=>!!target&&!!disk.metadata?.[KEY]?.entries?.some(e=>e.id===target),
+            check:disk=>(!target||disk.metadata?.[KEY]?.entries?.some(e=>e.id===target&&e.version===archive.entries.find(x=>x.id===target)?.version))&&JSON.stringify(disk.metadata?.[KEY])===expected&&(!verify||verify(disk)),
+            onCheck:check=>this.setOperation({state:'confirming',stage:'confirm',...check}),
+        });}catch(error){this.setOperation({state:'waiting',stage:'confirm',outcome:errorMeta(error).saveOutcome??'unknown',lastCheck:errorMeta(error).lastCheck??Date.now()});throw error;}
         if(bytes(archive)>WARN_ARCHIVE_BYTES)this.host.notify?.('warning','Архив больше 5 MiB. Рекомендуется экспортировать резервную копию.');
+    }
+    async refreshAfterSave(s,entry){
+        this.setOperation({stage:'tokens'});try{await bounded(()=>this.refreshMemory(),this.policy().tokensTimeout);}catch(error){this.host.report?.(error,{operation:'save-'+entry.type,severity:'warning'});}
+        this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',entryId:entry.id,type:entry.type,title:entry.title});return entry;
     }
     async saveDraft(draft,{title,text}) {
         return this.run(async()=>{
@@ -122,7 +136,7 @@ export class Engine {
             const committed=draft.commitId&&archive.entries.find(e=>e.id===draft.commitId);
             if(committed&&committed.version>=draft.commitVersion){
                 if(committed.version!==draft.commitVersion||committed.type!==draft.type||committed.title!==title||committed.text!==text)throw Error('Этот результат уже записан. Завершите проверку сохранения с прежним текстом; изменения внесите через архив.');
-                await this.persist(s,archive);await this.refreshMemory();return this.archive(s).entries.find(e=>e.id===committed.id);
+                await this.persist(s,archive);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===committed.id));
             }
             const old=draft.replaceId?archive.entries.find(e=>e.id===draft.replaceId):null;
             if(draft.replaceId&&!old)throw Error('Заменяемая запись удалена.');
@@ -151,11 +165,11 @@ export class Engine {
                 for(const e of archive.entries)if(replaced.has(e.id))e.active=false;
             }
             if(!old)archive.entries.push(entry);
-            draft.commitId=entry.id;draft.commitVersion=entry.version;
+            draft.commitId=entry.id;draft.commitVersion=entry.version;this.setOperation({type:entry.type,title:entry.title,entryId:entry.id});
             archive.pending={type:draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id};
             await this.persist(s,archive,disk=>entry.type!=='summary'||inspectSources(disk.messages,entry.sources).issues.length===0);
             if(archive.pending)await this.completePending(s);
-            await this.refreshMemory();return this.archive(s).entries.find(e=>e.id===entry.id);
+            return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));
         });
     }
     async completePending(s) {
