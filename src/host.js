@@ -50,7 +50,27 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
         },
         limits() {
             const c=context(),cc=c.mainApi==='openai';
-            return {context:Number(cc?c.chatCompletionSettings.openai_max_context:c.maxContext),output:Number(cc?c.chatCompletionSettings.openai_max_tokens:core.amount_gen)};
+            return {context:Number(core.getMaxContextTokens?.()??(cc?c.chatCompletionSettings.openai_max_context:c.maxContext)),output:Number(core.getMaxResponseTokens?.()??(cc?c.chatCompletionSettings.openai_max_tokens:core.amount_gen))};
+        },
+        async cleanReasoning(text) {
+            let native;
+            try {native=await import('/scripts/reasoning.js');}catch{}
+            let body=text;
+            // Only a leading, closed reasoning envelope is a candidate for automatic cleanup.
+            const opening=/^\s*<(think|thought)>/i.exec(body);
+            if(opening){
+                const tag=opening[1].toLowerCase();
+                const closed=new RegExp('^\\s*<'+tag+'>([\\s\\S]*?)</'+tag+'>','i').exec(body);
+                if(!closed||/<\/?(?:think|thought)>/i.test(closed[1]))return {text:body,ambiguous:true};
+                const remainder=body.slice(closed[0].length);
+                if(remainder&&!/^\s*\r?\n/.test(remainder))return {text:body,ambiguous:true};
+                const prefix=opening[0].trim(),suffix=closed[0].match(/<\/(?:think|thought)>$/i)[0];
+                const parsed=native?.parseReasoningFromString?.(body,{strict:true},{prefix,suffix});
+                body=parsed?.content!==undefined&&parsed.content!==body?parsed.content:remainder.trimStart();
+            }else if(typeof native?.removeReasoningFromString==='function'){
+                body=native.removeReasoningFromString(body)??body;
+            }
+            return {text:body,ambiguous:/<\/?(?:think|thought)>/i.test(body)};
         },
         lock() {
             if(core.isGenerating())throw tagError(Error('SillyTavern уже генерирует ответ. Дождитесь завершения.'),{code:'INT-003',stage:'api',reason:'busy'});
@@ -62,7 +82,7 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             if(!ownGeneration)return;cancelCurrent?.(reason);
             try{context().stopGeneration();}catch(error){diagnostics.report(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}));try{context().eventSource.emit(context().eventTypes.GENERATION_STOPPED);}catch{}}
         },
-        async generate(prompt,source) {
+        async generate(prompt,source,{responseLength}={}) {
             const c=context(),api=c.mainApi;
             if(!['openai','textgenerationwebui','kobold','koboldhorde','novel'].includes(api))throw tagError(Error('Это подключение не поддерживает проверенную отдельную генерацию. Используйте Chat Completion или Text Completion.'),{code:'GEN-001',stage:'api',reason:'unsupported-api'});
             // ST createRawPrompt substitutes macros, even in structured messages. A nonce-bearing
@@ -84,12 +104,14 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             try {
                 let cancel;const stopped=new Promise((_,reject)=>cancel=(reason='cancel-user')=>reject(tagError(Object.assign(Error('Генерация отменена.'),{name:'AbortError'}),{code:'GEN-006',stage:'api',reason:['chat-changed','cancel-unknown'].includes(reason)?reason:'cancel-user',snapshot:{macroUsed:false,generation:'canceled'}})));cancelCurrent=cancel;
                 c.eventSource.on(c.eventTypes.GENERATION_STOPPED,nativeCancel);
-                const data=await trace({code:'GEN-001',stage:'api',snapshot:{macroUsed:false,generation:'running'}},()=>Promise.race([c.generateRawData({api,prompt:[{role:'user',content:nonce}],systemPrompt:'',instructOverride:true,quietToLoud:true}),stopped]));
+                const data=await trace({code:'GEN-001',stage:'api',snapshot:{macroUsed:false,generation:'running'}},()=>Promise.race([c.generateRawData({api,prompt:[{role:'user',content:nonce}],systemPrompt:'',instructOverride:true,quietToLoud:true,responseLength}),stopped]));
                 if(!applied)throw tagError(Error('SillyTavern не применил буквальный пользовательский промпт. Генерация не сохранена.'),{code:'GEN-005',stage:'response',reason:'literal-hook'});
                 const reason=data?.choices?.[0]?.finish_reason??data?.stop_reason??data?.candidates?.[0]?.finishReason;
-                if(['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason))throw tagError(Error('Ответ модели обрезан лимитом. Увеличьте длину ответа в SillyTavern и повторите.'),{code:'GEN-007',stage:'response',reason:'truncated'});
+                const truncated=['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason);
                 if(['content_filter','safety','SAFETY','refusal'].includes(reason))throw tagError(Error('Модель остановила ответ фильтром. Исходники не изменены.'),{code:'GEN-008',stage:'response',reason:'refused'});
-                return trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));
+                const text=trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));
+                if(truncated&&!text?.trim())throw tagError(Error('Ответ модели был обрезан до появления текста.'),{code:'GEN-007',stage:'response',reason:'truncated'});
+                return {text,truncated};
             } finally {cancelCurrent=null;c.eventSource.removeListener(c.eventTypes.GENERATION_STOPPED,nativeCancel);c.eventSource.removeListener(event,literal);}
         },
         save:()=>trace({stage:'save'},()=>context().saveMetadata()),

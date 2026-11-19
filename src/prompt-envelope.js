@@ -49,18 +49,22 @@ export class PromptEnvelope {
             return '';
         }).join('');
         const result=[];
+        const removes=nodes=>nodes.some(node=>node.kind==='macro'&&node!==selected||node.kind==='macro'&&!delivered||node.kind==='auto'&&(!delivered||node!==selected)||node.kind==='source'&&(delivered&&ids.has(node.meta.id)||removes(node.children)));
         for(const {message,parts}of views){
+            if(typeof message.content!=='string'&&!Array.isArray(message.content)){result.push(message);continue;}
             const sources=[];let outside='';
             for(const part of parts)if(part.tree)for(const node of part.tree){if(node.kind==='source')sources.push(node);else if(node.kind==='text')outside+=node.text;}
-            const sourceOnly=delivered&&sources.length>0&&sources.every(s=>ids.has(s.meta.id))&&(!outside.trim()||sources.some(s=>outside.trim()===s.meta.name+':'));
+            const sourceOnly=delivered&&sources.length>0&&sources.every(s=>ids.has(s.meta.id))&&(!outside.trim()||sources.length===1&&outside.trim()===sources[0].meta.name+':');
             const rendered=parts.flatMap(({tree,part})=>{
                 if(!tree)return sourceOnly?[]:[part];
                 const nodes=sourceOnly?tree.filter(n=>n.kind!=='text'):tree,text=render(nodes);
-                return part?(text.trim()?[{...part,text}]:[]):[text];
+                const removed=sourceOnly||removes(tree);
+                return part?(removed&&!text.trim()?[]:[text===part.text?part:{...part,text}]):[text];
             });
             const content=typeof message.content==='string'?rendered[0]??'':rendered;
-            const hasContent=typeof content==='string'?content.trim().length>0:content.some(p=>p?.type!=='text'||p.text.trim());
-            if(hasContent||message.tool_calls)result.push({...message,content});
+            const hasContent=typeof content==='string'?content.trim().length>0:content.some(p=>p?.type!=='text'||typeof p.text!=='string'||p.text.trim());
+            const removed=sourceOnly||parts.some(part=>part.tree&&removes(part.tree));
+            if(hasContent||!removed||message.tool_calls||message.pvField)result.push({...message,content});
         }
         const output=typeof prompt==='string'?result[0]?.content??'':result;
         if(JSON.stringify(output).includes(this.prefix))throw invalid();

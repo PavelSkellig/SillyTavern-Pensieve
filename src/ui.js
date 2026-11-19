@@ -48,9 +48,14 @@ export class UI {
         this.operationSnapshot={...this.e.operation};this.operationUnsubscribe=this.e.subscribeOperation?.(snapshot=>{this.operationSnapshot=snapshot;this.syncOperationDock();if(snapshot.state==='saved'&&!this.e.busy&&this.panel.open&&this.tab==='home'&&this.isCurrentSession()&&snapshot.scope===this.e.recovery.key(this.renderSession.key))this.schedule(true);});
         const composer=document.getElementById('send_form');
         if(composer)composer.before(this.restoreDock);else this.panel.before(this.restoreDock);
+        if(composer&&typeof ResizeObserver==='function'){
+            const updateComposer=()=>this.panel.style.setProperty('--pv-composer-height',Math.ceil(composer.getBoundingClientRect().height)+'px');
+            this.composerObserver=new ResizeObserver(updateComposer);this.composerObserver.observe(composer);updateComposer();
+        }
         let artwork=head.querySelector('.pv-header-art');if(!artwork){artwork=el('img',{class:'pv-header-art',alt:'Серебряная чаша Омута памяти с голубым водоворотом',width:1672,height:941});head.prepend(artwork);}artwork.src=new URL('../assets/pensieve-header.png',import.meta.url).href;
         head.classList.add('pv-hero');const overlay=head.querySelector('.pv-hero-overlay')??el('div',{class:'pv-hero-overlay'}),controls=head.querySelector('.pv-header-controls')??el('div',{class:'pv-header-controls'});for(const control of head.querySelectorAll('[data-action="minimize"],[data-action="close"]'))controls.append(control);overlay.append(head.querySelector('.pv-brand-mark'),head.querySelector('.pv-brand'),controls);if(!overlay.isConnected)head.append(overlay);
         // Keep ST's document-wide drawer handlers out of this window's click path.
+        this.watchKeyboard();
         this.panel.addEventListener('click',event=>event.stopPropagation());
         this.panel.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();this.close();}});
         this.panel.addEventListener('close',()=>{
@@ -70,9 +75,15 @@ export class UI {
             const id=Number(action.closest('.mes')?.getAttribute('mesid'));if(!Number.isInteger(id))return;
             const edge=action.dataset.pensieveEdge;
             this.rangeWarning=null;
-            this.setRangeEdge(edge,id);this.decorateMessages();
-            this.e.host.notify('success',`${edge==='start'?'Начало':'Конец'} главы: сообщение №${id+1}.`);
+            this.resolveRange();
+            const cleared=this.rangeChatKey===this.e.key()&&this[edge]===id;
+            this.setRangeEdge(edge,cleared?null:id);this.decorateMessages();
+            this.e.host.notify('success',cleared?'Отметка снята.':`${edge==='start'?'Начало':'Конец'} главы: сообщение №${id+1}.`);
             if(this.start!==null&&this.end!==null&&this.end<this.start)this.e.host.notify('warning','Конец главы выбран раньше начала. Измените одну из границ.');
+            else if(this.start!==null&&this.end!==null){
+                const session=this.e.session(),range=captureRange(session.chat,this.start,this.end);
+                if(findOverlaps(this.e.archive(session).entries,range).length)this.e.host.notify('warning','Диапазон пересекается с сохранённой главой. При создании можно выбрать отдельную версию или доступную замену.');
+            }
             if(this.panel.open&&this.tab==='home')this.render();
         });
         const c=this.e.host.context();
@@ -101,6 +112,25 @@ export class UI {
         if(!saved)try{saved=JSON.parse(sessionStorage.getItem(this.rangeStorageKey())??'null');}catch{}
         if(saved&&typeof saved==='object')this.rangeEdges={start:saved.start??null,end:saved.end??null};
         this.resolveRange();
+    }
+    watchKeyboard(){
+        const viewport=window.visualViewport;if(!viewport)return;
+        const update=()=>{
+            const dialog=document.activeElement?.closest?.('dialog.pensieve');
+            const focused=document.activeElement?.matches?.('textarea,input:not([type=checkbox]):not([type=radio]),[contenteditable=true]');
+            const keyboard=focused&&viewport.scale===1&&Math.max(window.innerHeight,document.documentElement.clientHeight)-viewport.height>100;
+            if(this.keyboardDialog&&(!keyboard||this.keyboardDialog!==dialog)){
+                this.keyboardDialog.classList.remove('pv-keyboard-open');this.keyboardDialog=null;
+            }
+            if(!dialog||!keyboard)return;
+            this.keyboardDialog=dialog;dialog.classList.add('pv-keyboard-open');
+            dialog.style.setProperty('--pv-visible-height',Math.round(viewport.height)+'px');
+            dialog.style.setProperty('--pv-visible-top',Math.round(viewport.offsetTop)+'px');
+        };
+        viewport.addEventListener('resize',update);
+        viewport.addEventListener('scroll',update);
+        document.addEventListener('focusin',update);
+        document.addEventListener('focusout',()=>requestAnimationFrame(update));
     }
     persistRange() {
         if(!this.rangeChatKey)return;
@@ -136,11 +166,29 @@ export class UI {
         let progress;
         try{return await this.act(async()=>{
             const session=this.e.session();if(this.rangeChatKey!==session.key)throw Error('Выберите диапазон в текущем чате.');this.resolveRange();
-            const range=captureRange(this.e.host.context().chat,this.start,this.end);if(findOverlaps(this.e.archive(session).entries,range).length)throw Error('Диапазон уже обработан. Для отдельной версии или замены используйте форму главы на главной странице.');
+            if(!Number.isInteger(this.start)||!Number.isInteger(this.end)||this.start>this.end){this.e.host.notify('warning','Отметьте начало и конец главы в правильном порядке.');return;}
+            const archive=this.e.archive(session),range=captureRange(session.chat,this.start,this.end),overlaps=findOverlaps(archive.entries,range);
+            const options=overlaps.length?await this.chooseChapterOverlap(session,range,archive,overlaps):{};
+            if(!options)return;this.e.assert(session);
             const end=this.end,node=[...document.querySelectorAll('#chat .mes[mesid]')].find(n=>Number(n.getAttribute('mesid'))===end);
             progress=el('div',{class:'pv-chat-progress',role:'status'},'Создаётся глава…');(node?.querySelector('.mes_block')??node)?.append(progress);this.decorateMessages();
-            return this.generating(()=>this.generateCapturedRange(session,range),{inline:true,episode:true,waitForPreview:true,type:'summary'});
+            return this.generating(()=>this.generateCapturedRange(session,range,options),{inline:true,episode:true,waitForPreview:true,type:'summary'});
         });}finally{progress?.remove();this.episodeTask=false;this.decorateMessages();}
+    }
+    chooseChapterOverlap(session,range,archive,overlaps){
+        return new Promise(resolve=>{
+            const {dialog,body}=this.makeDialog('Диапазон пересекается с главой',true);
+            let choice=null;
+            const decide=value=>{choice=value;dialog.close();};
+            body.append(el('p',{},'Выбранные сообщения уже входят в главы: '+overlaps.map(entry=>entryDisplayTitle(entry,archive.entries)).join(', ')+'.'));
+            const actions=row(button('Создать отдельную версию',()=>decide({allowOverlap:true}),true));
+            for(const entry of overlaps){
+                if(hasDetachedSources(entry)||entry.sources.length!==range.length||!entry.sources.every((source,i)=>source.id===range[i].id))continue;
+                actions.append(button('Заменить '+entryDisplayTitle(entry,archive.entries),()=>decide({allowOverlap:true,replaceId:entry.id})));
+            }
+            actions.append(button('Снять отметки',()=>{this.clearRange();this.decorateMessages();decide(null);}),button('Отмена',()=>decide(null)));
+            body.append(actions);dialog.onclose=()=>{dialog.remove();resolve(choice);};dialog.showModal();
+        });
     }
     async episodeSaved(draft) {
         try{if(draft.type==='summary'&&this.rangeChatKey===draft.session.key&&this.rangeEdges.start?.ref===draft.range[0]?.ref&&this.rangeEdges.end?.ref===draft.range.at(-1)?.ref)this.clearRange();this.decorateMessages();}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
@@ -508,47 +556,81 @@ export class UI {
             for(const entry of entries)section.append(nodeFor(entry));this.content.append(section);
         }
     }
+    async confirmPromptDrafts(types,action){
+        this.rememberView();
+        const settings=this.e.settings(),id=settings.prompts.summary.selected;
+        const changed=types.flatMap(type=>{
+            const key=JSON.stringify([type,id]),draft=this.promptDrafts?.get(key),preset=settings.prompts[type].presets.find(item=>item.id===id);
+            return draft&&preset&&editorDisplay(preset.text)!==draft.text?[{type,key,draft,preset}]:[];
+        });
+        if(!changed.length)return true;
+        const choice=await new Promise(resolve=>{
+            const {dialog,body}=this.makeDialog('Есть несохранённые изменения');
+            let result='cancel';
+            const choose=value=>{result=value;dialog.close();};
+            body.append(el('p',{},`Перед ${action} выберите, какую версию использовать. Изменены промпты: ${changed.map(item=>LEVELS[item.type].genitive).join(', ')}.`),
+                row(button('Сохранить и продолжить',()=>choose('save'),true),button('Использовать сохранённую версию',()=>choose('saved')),button('Отмена',()=>choose('cancel'))));
+            dialog.onclose=()=>{dialog.remove();resolve(result);};dialog.showModal();
+        });
+        if(choice==='cancel')return false;
+        if(choice==='saved')return true;
+        if(settings.prompts.summary.selected!==id||changed.some(({type,preset,draft})=>settings.prompts[type].presets.find(item=>item.id===id)!==preset||preset.text!==draft.base)){
+            this.e.host.notify('warning','Сохранённый промпт изменился. Откройте редактор и сравните версии.');return false;
+        }
+        for(const {key,draft,preset} of changed){
+            preset.history.push(preset.text);preset.text=draft.text;this.promptDrafts.delete(key);
+            if(this.promptEditor?.key===key){this.promptEditor.base=preset.text;this.promptEditor.displayBase=editorDisplay(preset.text);this.promptEditor.indicator.hidden=true;}
+        }
+        this.saveSettings();return true;
+    }
     promptsView() {
         const settings=this.e.settings(),type=this.promptTab,id=settings.prompts.summary.selected,group=settings.prompts[type],preset=group.presets.find(p=>p.id===id);
         const select=el('select',{'aria-label':'Пресет промпта'});presetList(settings).forEach(p=>select.append(el('option',{value:p.id},p.name)));select.value=id;
         const key=JSON.stringify([type,id]),draft=this.promptDrafts?.get(key);
-        if(draft&&draft.base!==preset.text)this.promptDrafts.delete(key);
-        const text=el('textarea',{'aria-label':`Промпт ${LEVELS[type].genitive}`,spellcheck:'false'},draft?.base===preset.text?draft.text:preset.text);
-        const editor=this.promptEditor={node:text,key,base:preset.text,displayBase:editorDisplay(preset.text)};
-        select.onchange=async()=>{if(text.value!==editor.displayBase&&!await this.confirm('Несохранённый промпт','Отбросить изменения текущего промпта и открыть другой пресет?')){select.value=id;return;}text.value=preset.text;this.promptDrafts?.delete(key);selectPreset(settings,select.value);this.saveSettings();this.render();};
-        const controls=row(iconButton('Создать пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(name){createPreset(settings,name,()=>this.e.host.uuid());this.saveSettings();}}),'fa-plus'),iconButton('Импорт пресета',async()=>{try{const f=await readFile('.json,application/json');if(f)await this.act(()=>{importPreset(settings,f.text,()=>this.e.host.uuid());this.saveSettings();this.showNotice('Импортирован набор из трёх промптов.');},{code:'DATA-007',stage:'import',operation:'prompt-import'});}catch(error){this.issue(error,{code:'DATA-007',stage:'import',operation:'prompt-import'});}},'fa-file-import'),iconButton('Экспорт пресета',()=>fileTrace('prompt-export',()=>download('pensieve-prompt-preset.json',JSON.stringify(exportPreset(settings),null,2))),'fa-file-export'));controls.classList.add('pv-preset-actions');
+        const text=el('textarea',{'aria-label':`Промпт ${LEVELS[type].genitive}`,spellcheck:'false'},draft?.text??preset.text);
+        const indicator=el('small',{class:'pv-draft-indicator',role:'status'},'Есть несохранённые изменения');
+        const editor=this.promptEditor={node:text,key,base:preset.text,displayBase:editorDisplay(preset.text),indicator};
+        const updateDraft=()=>{indicator.hidden=text.value===editor.displayBase;};text.addEventListener('input',updateDraft);updateDraft();
+        select.onchange=()=>{this.rememberView();selectPreset(settings,select.value);this.saveSettings();this.render();};
+        const controls=row(iconButton('Создать пресет',()=>this.act(async()=>{const name=await this.askText('Название нового пресета','');if(name){createPreset(settings,name,()=>this.e.host.uuid());this.saveSettings();}}),'fa-plus'),iconButton('Импорт пресета',async()=>{try{const f=await readFile('.json,application/json');if(f)await this.act(()=>{importPreset(settings,f.text,()=>this.e.host.uuid());this.saveSettings();this.showNotice('Импортирован набор из трёх промптов.');},{code:'DATA-007',stage:'import',operation:'prompt-import'});}catch(error){this.issue(error,{code:'DATA-007',stage:'import',operation:'prompt-import'});}},'fa-file-import'),iconButton('Экспорт пресета',async()=>{if(await this.confirmPromptDrafts(Object.keys(LEVELS),'экспортом'))return fileTrace('prompt-export',()=>download('pensieve-prompt-preset.json',JSON.stringify(exportPreset(settings),null,2)));},'fa-file-export'));controls.classList.add('pv-preset-actions');
         const toolbar=el('div',{class:'pv-preset-toolbar'});toolbar.append(field('Пресет',select),controls);this.content.append(toolbar);
         const segments=row(...Object.entries(LEVELS).map(([t,level])=>button(`Промпт ${level.genitive}`,()=>{this.promptTab=t;this.render();},this.promptTab===t)));segments.classList.add('pv-level-tabs');this.content.append(segments);
         text.classList.add('pv-prompt-text');
         const editorHead=el('div',{class:'pv-prompt-heading'});editorHead.append(el('span',{},'Ваш промпт'),iconButton('Развернуть редактор',()=>this.expandPrompt(text),'fa-expand'));
-        this.content.append(editorHead,field(`Ваш промпт ${LEVELS[type].genitive}`,text),el('p',{class:'pv-muted'},'Один пресет содержит промпты главы, части и тома. Текст используется буквально, включая Markdown и {{макросы}}. Сохраните изменения перед генерацией или экспортом.'));
-        this.content.append(row(button('Сохранить промпт',()=>{if(text.value!==editor.displayBase){preset.history.push(preset.text);preset.text=text.value;}editor.base=preset.text;editor.displayBase=editorDisplay(preset.text);this.promptDrafts?.delete(key);this.saveSettings();this.showNotice('Промпт сохранён в выбранном пресете.');},true),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;text.value=previous;editor.base=previous;editor.displayBase=editorDisplay(previous);this.promptDrafts?.delete(key);this.saveSettings();}}))));
+        this.content.append(editorHead,indicator,field(`Ваш промпт ${LEVELS[type].genitive}`,text),el('p',{class:'pv-muted'},'Один пресет содержит промпты главы, части и тома. Текст используется буквально, включая Markdown и {{макросы}}. Сохраните изменения перед генерацией или экспортом.'));
+        this.content.append(row(button('Сохранить промпт',()=>{if(text.value!==editor.displayBase){preset.history.push(preset.text);preset.text=text.value;}editor.base=preset.text;editor.displayBase=editorDisplay(preset.text);this.promptDrafts?.delete(key);updateDraft();this.saveSettings();this.showNotice('Промпт сохранён в выбранном пресете.');},true),button('Предыдущая версия',()=>this.act(async()=>{if(!preset.history.length)throw Error('Предыдущих версий пока нет.');if(await this.confirm('Восстановление промпта','Восстановить предыдущую сохранённую версию?')){const previous=preset.history.pop();preset.history.push(preset.text);preset.text=previous;text.value=previous;editor.base=previous;editor.displayBase=editorDisplay(previous);this.promptDrafts?.delete(key);updateDraft();this.saveSettings();}}))));
         const more=el('details',{class:'pv-preset-more'});more.append(el('summary',{},'Действия с пресетом'));
         const rename=button('Переименовать',()=>this.act(async()=>{const name=await this.askText('Название пресета',preset.name);if(name){renamePreset(settings,id,name);this.saveSettings();}})),remove=button('Удалить пресет',()=>this.act(async()=>{if(await this.confirm('Удаление пресета','Удалить весь набор из трёх промптов?')){deletePreset(settings,id);text.value=editor.displayBase;for(const t of Object.keys(LEVELS))this.promptDrafts?.delete(JSON.stringify([t,id]));this.saveSettings();}}));rename.disabled=remove.disabled=id==='default';
         more.append(row(rename,remove,button('Восстановить «Основной»',()=>this.act(async()=>{if(await this.confirm('Встроенный пресет','Восстановить три исходных промпта «Основного»? Сохранённые изменения останутся в истории версий; другие пресеты сохранятся.')){restoreBuiltin(settings);for(const t of Object.keys(LEVELS))this.promptDrafts?.delete(JSON.stringify([t,'default']));if(id==='default'){text.value=settings.prompts[type].presets.find(p=>p.id==='default').text;editor.base=settings.prompts[type].presets.find(p=>p.id==='default').text;editor.displayBase=editorDisplay(editor.base);}this.saveSettings();}}))));
-        more.append(el('p',{class:'pv-muted'},'«Основной» нельзя удалить или переименовать. Для отдельного варианта создайте свой пресет.'),row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;this.showNotice('Текст загружен в текущий редактор. Нажмите «Сохранить промпт».');}}catch(error){this.issue(error,{code:'DATA-007',stage:'import',operation:'prompt-import'});}}),button('Экспорт .txt',()=>fileTrace('prompt-export',()=>download(`pensieve-prompt-${type}.txt`,text.value,'text/plain')))));this.content.append(more);
+        more.append(el('p',{class:'pv-muted'},'«Основной» нельзя удалить или переименовать. Для отдельного варианта создайте свой пресет.'),row(button('Импорт из .txt',async()=>{try{const f=await readFile('.txt,.md,text/plain');if(f){text.value=f.text;updateDraft();this.showNotice('Текст загружен в текущий редактор. Нажмите «Сохранить промпт».');}}catch(error){this.issue(error,{code:'DATA-007',stage:'import',operation:'prompt-import'});}}),button('Экспорт .txt',async()=>{if(await this.confirmPromptDrafts([type],'экспортом'))return fileTrace('prompt-export',()=>download(`pensieve-prompt-${type}.txt`,preset.text,'text/plain'));})));this.content.append(more);
     }
 
     expandPrompt(text) {
         const {dialog,body}=this.makeDialog('Редактор промпта');dialog.classList.add('pv-prompt-expanded');
         const area=el('textarea',{'aria-label':'Полный редактор промпта',spellcheck:'false'},text.value);
         body.append(area,button('Вернуться к промпту',()=>dialog.close(),true));
-        dialog.onclose=()=>{text.value=area.value;dialog.remove();};dialog.showModal();area.focus();
+        dialog.onclose=()=>{text.value=area.value;text.dispatchEvent(new Event('input'));dialog.remove();};dialog.showModal();area.focus();
     }
     saveSettings() {this.e.host.context().saveSettingsDebounced();this.schedule();}
     memoryPlacementView(section,settings) {
-        section.append(el('p',{class:'pv-muted'},'Куда вставлять память'));
-        const options=el('div',{class:'pv-placement-options'}),details=el('div',{class:'pv-placement-details'});
-        for(const [value,title]of [[-1,'Никуда (только макрос)'],[2,'Перед основным промптом'],[0,'После основного промпта'],[1,'Внутри чата']]){
-            const radio=el('input',{type:'radio',name:'pensieve-memory-position',value,'aria-label':title});radio.checked=Number(settings.position)===value;
-            radio.onchange=()=>{if(!radio.checked)return;settings.position=value;details.hidden=value!==1;this.saveSettings();};
+        const options=el('div',{class:'pv-placement-options'}),inChat=el('div',{class:'pv-placement-details'}),macro=el('div',{class:'pv-placement-macro'});
+        const update=()=>{inChat.hidden=Number(settings.position)!==1;macro.hidden=Number(settings.position)!==-1;};
+        for(const [value,title]of [[-1,'Никуда — только макрос'],[2,'Перед основным промптом'],[0,'После основного промпта'],[1,'Внутри чата']]){
+            const radio=el('input',{type:'radio',name:'pensieve-memory-position',value,'aria-label':title});
+            radio.checked=Number(settings.position)===value;
+            radio.onchange=()=>{if(radio.checked){settings.position=value;update();this.saveSettings();}};
             const label=el('label');label.append(radio,el('span',{},title));options.append(label);
         }
-        const depth=el('input',{type:'number',min:0,max:10000,value:settings.depth,'aria-label':'Глубина памяти'});depth.onchange=()=>{settings.depth=Math.max(0,Math.min(10000,Number(depth.value)||0));depth.value=settings.depth;this.saveSettings();};
-        const role=el('select',{'aria-label':'Роль памяти'});for(const [value,title]of [[0,'Система'],[1,'Пользователь'],[2,'Ассистент']])role.append(el('option',{value},title));role.value=settings.role;role.onchange=()=>{settings.role=Number(role.value);this.saveSettings();};
-        details.hidden=Number(settings.position)!==1;details.append(field('Глубина',depth),field('Роль',role),el('p',{class:'pv-muted'},'Глубина 0 — после последнего сообщения, 1 — перед последним.'));
-        const template=el('textarea',{class:'pv-short','aria-label':'Шаблон инжекта'},settings.template);template.onchange=()=>{settings.template=template.value;this.saveSettings();};
-        section.append(options,details,el('p',{class:'pv-muted'},'Memory Echo: {{memory_echo}}. Макрос в используемом промпте имеет приоритет над автоматической вставкой.'),field('Шаблон инжекта',template),el('p',{class:'pv-muted'},'Только для автоматической вставки. {{memory_echo}} обозначает память; без него память добавится после шаблона. Пустой шаблон оставляет только текст памяти.'));
+        const status=el('small',{role:'status'});
+        macro.append(el('strong',{},'Макрос для пресета SillyTavern'),row(el('code',{},'{{memory_echo}}'),button('Копировать',async()=>{await copy('{{memory_echo}}');status.textContent='Макрос скопирован.';})),el('p',{class:'pv-muted'},'Вставь макрос в свой пресет SillyTavern. Автоматической подстановки в этом режиме нет.'),status);
+        const depth=el('input',{type:'number',min:0,max:10000,step:1,value:settings.depth,'aria-label':'Глубина вставки'});
+        const depthStatus=el('p',{class:'pv-muted',role:'status'},'0 — в конце истории; 4 — перед последними четырьмя сообщениями.');
+        depth.onchange=()=>{const n=depth.valueAsNumber;if(!Number.isInteger(n)||n<0||n>10000){depth.value=settings.depth;depthStatus.textContent='Введите целое число от 0 до 10 000.';return;}settings.depth=n;depthStatus.textContent='0 — в конце истории; 4 — перед последними четырьмя сообщениями.';this.saveSettings();};
+        const role=el('select',{'aria-label':'Роль сообщения'});
+        for(const [value,title]of [[0,'System'],[1,'User'],[2,'Assistant']])role.append(el('option',{value},title));
+        role.value=settings.role;role.onchange=()=>{settings.role=Number(role.value);this.saveSettings();};
+        inChat.append(field('Глубина вставки',depth),field('Роль сообщения',role),depthStatus);
+        update();section.append(options,macro,inChat);
     }
     settingsView(archive) {
         const settings=this.e.settings();this.content.append(el('h3',{class:'pv-view-heading'},'Настройки'));
@@ -566,7 +648,7 @@ export class UI {
         if(archive){const complete=el('section',{class:'pv-complete-backup'});complete.append(el('h4',{},'Резервная копия памяти'),el('p',{class:'pv-muted'},'Один JSON: все главы, части, тома, их связи, промпты и настройки. Копия восстанавливает память, а не удалённую переписку.'),row(iconButton('Экспортировать всё',()=>this.act(()=>this.exportFullBackup()),'fa-download',true),iconButton('Восстановить из копии',()=>this.readFullBackup(),'fa-upload')));archiveGroup.append(complete,el('p',{class:'pv-muted'},`Архив текущего чата: ${(bytes(archive)/1024).toFixed(1)} KiB. Резервная копия содержит личные тексты — храните её у себя.`));
         archiveGroup.append(row(button('Экспорт архива JSON',()=>fileTrace('backup-export',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2)))),button('Импорт архива JSON',()=>this.readFullBackup())));
         }else archiveGroup.append(el('p',{class:'pv-muted'},'Откройте сохранённый чат для экспорта, импорта и восстановления его архива. Общие настройки и промпты доступны без чата.'));
-        archiveGroup.append(row(button('Экспорт промптов JSON',()=>fileTrace('prompt-export',()=>download('pensieve-prompts.json',JSON.stringify({format:'pensieve-prompts',version:1,prompts:settings.prompts},null,2)))),button('Импорт промптов JSON',()=>this.act(async()=>{
+        archiveGroup.append(row(button('Экспорт промптов JSON',async()=>{if(await this.confirmPromptDrafts(Object.keys(LEVELS),'экспортом'))return fileTrace('prompt-export',()=>download('pensieve-prompts.json',JSON.stringify({format:'pensieve-prompts',version:1,prompts:settings.prompts},null,2)));}),button('Импорт промптов JSON',()=>this.act(async()=>{
             const f=await readFile('.json');if(!f)return;const data=JSON.parse(f.text);if(data.format!=='pensieve-prompts'||data.version!==1)throw Error('Неверный формат файла промптов.');
             const result=clone(settings.prompts);
             for(const type of ['summary','arc','volume']){const g=data.prompts?.[type];if(type==='volume'&&!g)continue;if(!g||!Array.isArray(g.presets)||!g.presets.length||g.presets.length>100)throw Error('Неверный список пресетов.');const ids=new Set();result[type].presets=g.presets.map(p=>{if(typeof p.id!=='string'||!p.id||ids.has(p.id)||typeof p.name!=='string'||!p.name.trim()||typeof p.text!=='string')throw Error('Неверные поля пресета.');ids.add(p.id);return{id:p.id,name:p.name,text:p.text,history:Array.isArray(p.history)?p.history.filter(h=>typeof h==='string'):[]};});result[type].selected=ids.has(g.selected)?g.selected:result[type].presets[0].id;}
@@ -579,8 +661,8 @@ export class UI {
         recovery.append(row(button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete'))),button(archive.pending?.type==='backup'?'Оставить копию в архиве без активности':'Вернуть исходники незавершённой операции',()=>this.act(()=>this.e.recover('restore')))));
         this.diagnosticsView?.settings(maintenance);
     }
-    exportFullBackup() {
-        const session=this.e.session(),file=createBackup(this.e.archive(session),this.e.settings(),{key:session.key,name:String(this.e.host.context().chatId)}),date=new Date(),stamp=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+    async exportFullBackup() {
+        const session=this.e.session();if(!await this.confirmPromptDrafts(Object.keys(LEVELS),'экспортом копии'))return;this.e.assert(session);const file=createBackup(this.e.archive(session),this.e.settings(),{key:session.key,name:String(this.e.host.context().chatId)}),date=new Date(),stamp=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
         download(`Omut_Pamyati_${stamp}.json`,JSON.stringify(file,null,2));
     }
     async readFullBackup() {
@@ -596,7 +678,7 @@ export class UI {
         const active=check('Восстановить активные записи',!!file.source.hadPendingOperation),prompts=check('Восстановить промпты из копии',!file.prompts),settings=check('Восстановить общие настройки из копии',!file.settings);
         body.append(el('p',{class:'pv-muted'},'По умолчанию новые записи останутся в архиве. Активность проверяется по пересечениям и лимиту. Промпты и общие настройки используются и другими чатами — они изменятся только при выбранных флажках.'));
         if(file.source.hadPendingOperation)body.append(el('p',{class:'pv-warning'},'Копия сделана при незавершённой операции. Сначала восстановите её без активности.'));
-        const replacement=el('div',{class:'pv-warning',hidden:'true'}),ack=el('input',{type:'checkbox','aria-label':'Подтверждаю замену текущего архива'}),ackLabel=el('label'),exportCurrent=button('Сохранить текущую копию',()=>this.act(()=>{this.e.assert(session);this.exportFullBackup();}));ackLabel.append(ack,document.createTextNode('Подтверждаю замену текущего архива'));replacement.append(el('p',{},'Замена удалит текущие записи из архива этого чата. Сначала можно сохранить их отдельную копию.'),exportCurrent,ackLabel);body.append(replacement);
+        const replacement=el('div',{class:'pv-warning',hidden:'true'}),ack=el('input',{type:'checkbox','aria-label':'Подтверждаю замену текущего архива'}),ackLabel=el('label'),exportCurrent=button('Сохранить текущую копию',()=>this.act(()=>{this.e.assert(session);return this.exportFullBackup();}));ackLabel.append(ack,document.createTextNode('Подтверждаю замену текущего архива'));replacement.append(el('p',{},'Замена удалит текущие записи из архива этого чата. Сначала можно сохранить их отдельную копию.'),exportCurrent,ackLabel);body.append(replacement);
         const status=el('p',{role:'status'}),cancel=button('Отмена',()=>{if(!applying){dialog.pensieveRetained=false;dialog.close();}}),close=dialog.querySelector('.pv-header button');body.append(status);let applying=false,planError=false;
         const save=button('Восстановить память',async()=>{
             if(applying||planError||mode.value==='replace'&&!ack.checked)return;
@@ -638,6 +720,7 @@ export class UI {
         return this.e.generateSummary(session.chat.indexOf(range[0].ref),session.chat.indexOf(range.at(-1).ref),options);
     }
     async generating(fn,options={}) {
+        const session=this.e.session();if(!await this.confirmPromptDrafts([options.type??'summary'],'генерацией'))return null;this.e.assert(session);
         this.generationView??=new GenerationView(this.e,{
             makeDialog:(...args)=>this.makeDialog(...args),preview:draft=>{const done=this.preview(draft);return {done,dialog:this.editor};},
             onSaved:async draft=>{await this.episodeSaved(draft);this.postSaveRefresh();},
@@ -652,6 +735,9 @@ export class UI {
         const {dialog,body}=this.makeDialog(`Предварительный просмотр ${LEVELS[draft.type].genitive}`,true);this.editor=dialog;
         const title=el('input',{value:draft.title,'aria-label':'Название воспоминания'}),text=el('textarea',{'aria-label':'Текст воспоминания'},draft.text);
         body.append(field('Название',title),field('Текст — можно отредактировать перед сохранением',text));
+        const warning=el('p',{class:'pv-warning',role:'status'});
+        const updateWarning=()=>{warning.textContent=[draft.truncated?'Ответ модели был обрезан. Проверьте текст перед сохранением.':'',draft.reasoningAmbiguous?'В ответе есть неоднозначная разметка рассуждений. Проверьте её и при необходимости отредактируйте текст.':''].filter(Boolean).join(' ');warning.hidden=!warning.textContent;};
+        updateWarning();body.prepend(warning);
         const notice=el('p',{role:'status'});body.append(notice);let saving=false,finished=false;
         const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;const previewJob=owned();if(previewJob)previewJob.previewStatus=notice;
         const finish=()=>{if(finished)return;finished=true;dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};
@@ -662,14 +748,44 @@ export class UI {
             catch(error){notice.textContent=this.issue(error,{severity:'error'});if(job)job.previewError=notice.textContent;}
             finally{saving=false;save.disabled=false;regen.disabled=!!draft.commitId;if(job){job.previewSaving=false;this.generationView.paint(job);}}
         },true);
-        const regen=button('Повторить генерацию',async()=>{save.disabled=true;regen.disabled=true;try{await this.e.regenerate(draft);text.value=draft.text;}catch(error){notice.textContent=this.issue(error,{severity:'error'});}finally{save.disabled=false;regen.disabled=false;}});
+        const regen=button('Повторить генерацию',async()=>{save.disabled=true;regen.disabled=true;try{if(await this.confirmPromptDrafts([draft.type],'повторной генерацией')){await this.e.regenerate(draft);text.value=draft.text;updateWarning();}}catch(error){notice.textContent=this.issue(error,{severity:'error'});}finally{save.disabled=false;regen.disabled=false;}});
         body.append(row(save,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(!saving)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(this.e.busy)this.e.cancel();dialog.close();})));
         dialog.oncancel=event=>{if(saving){event.preventDefault();minimize.click();}else if(this.e.busy)this.e.cancel();};dialog.onclose=()=>{if(dialog.pensieveMinimizeClosures){dialog.pensieveMinimizeClosures--;return;}finish();};dialog.showModal();
         });
     }
+    openRecordPage(title,key,render){
+        const session=this.e.session();
+        let viewer=this.recordViewer;
+        if(!viewer?.dialog.open){
+            const {dialog,body}=this.makeDialog(title,true);
+            viewer={dialog,body,session,pages:[],frames:new Map()};this.recordViewer=viewer;
+            dialog.onclose=()=>{dialog.remove();if(this.recordViewer===viewer)this.recordViewer=null;};
+            dialog.showModal();
+        }
+        this.e.assert(viewer.session);
+        const current=viewer.pages.at(-1);
+        if(current?.key===key)return viewer;
+        if(current)current.scroll=viewer.body.scrollTop;
+        let frame=viewer.frames.get(key),previous=viewer.pages.indexOf(frame);
+        if(previous>=0)viewer.pages.length=previous+1;
+        else{
+            if(!frame){const content=el('div',{class:'pv-record-page'});frame={key,title,content,scroll:0};viewer.frames.set(key,frame);render(viewer.dialog,content);}
+            viewer.pages.push(frame);
+        }
+        this.paintRecordPage(viewer);
+        return viewer;
+    }
+    paintRecordPage(viewer){
+        const page=viewer.pages.at(-1);
+        viewer.dialog.querySelector('.pv-header h2').textContent=page.title;
+        viewer.dialog.setAttribute('aria-label',page.title);
+        viewer.body.replaceChildren();
+        if(viewer.pages.length>1)viewer.body.append(button('← Назад',()=>{page.scroll=viewer.body.scrollTop;viewer.pages.pop();this.paintRecordPage(viewer);}));
+        viewer.body.append(page.content);viewer.body.scrollTop=page.scroll;
+    }
     editEntry(entry,editable) {
         const session=this.e.session(),archive=this.e.archive(session);
-        const {dialog,body}=this.makeDialog(editable?'Редактирование воспоминания':entryDisplayTitle(entry,archive.entries),true);this.editor=dialog;
+        return this.openRecordPage(editable?'Редактирование воспоминания':entryDisplayTitle(entry,archive.entries),`entry:${entry.id}:${editable}`,(dialog,body)=>{
         const title=el('input',{value:entry.title,'aria-label':'Название записи'}),text=el('textarea',{'aria-label':'Текст записи'},entry.text);title.readOnly=text.readOnly=!editable;
         body.append(field('Название',title),field('Текст',text));
         const range=this.sourceRanges?.get(entry.id),details=el('div',{class:'pv-record-info'}),state=this.viewState?.byId.get(entry.id);
@@ -683,17 +799,17 @@ export class UI {
         if(editable)body.append(button('Сохранить изменения',async()=>{try{this.e.assert(session);await this.e.edit(entry.id,{title:title.value,text:text.value});dialog.close();await this.refresh(true);}catch(error){status.textContent=this.issue(error,{severity:'error'});}},true));
         if(entry.history.length) {
             const versions=el('select',{'aria-label':'Предыдущая версия'});entry.history.forEach((h,i)=>versions.append(el('option',{value:i},`Версия ${h.version} — ${h.title}`)));
-            const historyActions=row(button('Посмотреть версию',()=>{const h=entry.history[Number(versions.value)];this.textDialog(`Версия ${h.version}`,h.text);}));
+            const historyActions=row(button('Посмотреть версию',()=>{const h=entry.history[Number(versions.value)];this.openRecordPage(`Версия ${h.version}`,`history:${entry.id}:${h.version}`,(historyDialog,historyBody)=>historyBody.append(el('pre',{},h.text),button('Скопировать',()=>copy(h.text)),button('Закрыть',()=>historyDialog.close())));}));
             if(editable)historyActions.append(button('Восстановить версию',async()=>{if(!await this.confirm('Восстановление версии','Сохранить выбранную предыдущую версию как новую редакцию?',session))return;const h=entry.history[Number(versions.value)];try{this.e.assert(session);await this.e.edit(entry.id,{title:h.title,text:h.text});dialog.close();await this.refresh(true);}catch(error){status.textContent=this.issue(error,{severity:'error'});}}));
             body.append(field('Предыдущие версии',versions),historyActions);
         }
         if(editable&&entry.needsReview)body.append(button('Проверено — снять отметку',()=>this.act(async()=>{this.e.assert(session);await this.e.change(a=>a.entries.find(e=>e.id===entry.id).needsReview=false);dialog.close();})));
-        body.append(row(button('Скопировать',()=>this.act(()=>copy(text.value))),button('Закрыть',()=>dialog.close())));dialog.onclose=()=>{dialog.remove();if(this.editor===dialog)this.editor=null;};dialog.showModal();
+        body.append(row(button('Скопировать',()=>this.act(()=>copy(text.value))),button('Закрыть',()=>dialog.close())));});
     }
     showContents(entry) {
         const session=this.e.session(),archive=this.e.archive(session),index=hierarchyIndex(archive.entries),current=index.byId.get(entry.id);
         if(!current)return;
-        const {dialog,body}=this.makeDialog(`Содержимое: ${entryDisplayTitle(current,archive.entries)}`,true);
+        return this.openRecordPage(`Содержимое: ${entryDisplayTitle(current,archive.entries)}`,`contents:${current.id}`,(dialog,body)=>{
         body.append(el('p',{class:'pv-muted'},'Исходные записи остаются в архиве. Открытие не меняет их активность или текст.'));
         for(const id of childrenIds(current)){
             const child=index.byId.get(id),line=el('article',{class:'pv-source-item','data-source-id':id});
@@ -702,7 +818,7 @@ export class UI {
             if(range)line.append(el('small',{},`${range.historical?'Исторические сообщения':'Сообщения'} ${range.start+1}–${range.end+1}`));
             line.append(button('Открыть',()=>{this.e.assert(session);this.editEntry(child,false);}));body.append(line);
         }
-        body.append(button('Закрыть',()=>dialog.close()));dialog.onclose=()=>dialog.remove();dialog.showModal();
+        body.append(button('Закрыть',()=>dialog.close()));});
     }
     decorateMessages() {
         let archive;try{archive=this.e.archive();}catch{return;}

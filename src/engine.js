@@ -72,19 +72,27 @@ export class Engine {
         const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.host.count(`${preset.text}\n\n${source}`),this.policy().tokensTimeout));
         this.assert(s);
         if(this.cancelled)throw tagError(Error('Генерация отменена до отправки запроса.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
-        if(!Number.isFinite(tokens)||!Number.isFinite(limits.context)||!Number.isFinite(limits.output))throw tagError(Error('Не удалось проверить лимит контекста модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
-        if(tokens+limits.output+256>limits.context)throw tagError(Error(`Выбрано примерно ${tokens} токенов; с резервом ответа это превышает контекст ${limits.context}. Уменьшите диапазон или число записей либо увеличьте контекст в SillyTavern. Ничего не обрезано.`),{code:'MEM-005',stage:'tokens',reason:'context-local'});
-        const unlock=this.host.lock?.();
+        if(!Number.isFinite(tokens)||!Number.isFinite(limits.context))throw tagError(Error('Не удалось проверить лимит контекста модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
+        const requested={summary:2048,arc:3072,volume:4096}[draft.type];
+        const responseLength=Math.min(requested,Math.floor(limits.context-tokens)-32);
+        if(responseLength<1)throw tagError(Error('Исходный текст и промпт не оставляют места для ответа. Уменьшите диапазон или число записей.'),{code:'MEM-005',stage:'tokens',reason:'context-local'});
+        const unlock=this.host.lock?.();let generated;
         try {
             this.setOperation({stage:'api'});
-            const text=await trace({code:'GEN-001',stage:'api',operation:'generate-'+draft.type,snapshot:{macroUsed:false,generation:'running'}},()=>this.host.generate(preset.text,source));
+            generated=await trace({code:'GEN-001',stage:'api',operation:'generate-'+draft.type,snapshot:{macroUsed:false,generation:'running'}},()=>this.host.generate(preset.text,source,{responseLength}));
             this.assert(s);
             if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
             if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
-            if(typeof text!=='string')throw tagError(Error('Модель вернула некорректный формат ответа. Исходные сообщения не изменены.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
-            if(!text.trim())throw tagError(Error('Модель вернула пустой ответ. Исходные сообщения не изменены.'),{code:'GEN-004',stage:'response',reason:'empty'});
-            draft.text=text;draft.preset=preset.name;draft.compressionSource=source;return draft;
         } finally {try{unlock?.();}catch(error){this.host.report?.(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}),{severity:'warning'});try{this.host.emergencyUnlock?.();}catch(failure){this.host.report?.(failure,{code:'INT-004',stage:'unlock',reason:'release',notify:false});}}}
+        const raw=typeof generated==='string'?generated:generated?.text;
+        if(typeof raw!=='string')throw tagError(Error('Модель вернула некорректный формат ответа. Исходные сообщения не изменены.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
+        const cleaned=await this.host.cleanReasoning?.(raw)??{text:raw,ambiguous:false};
+        this.assert(s);if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'response',reason:this.cancelReason??'cancel-user'});
+        if(!cleaned.text.trim())throw tagError(Error('Модель не вернула текст воспоминания.'),{code:generated?.truncated?'GEN-007':'GEN-004',stage:'response',reason:generated?.truncated?'truncated':'empty'});
+        draft.text=cleaned.text;
+        draft.truncated=generated?.truncated===true;
+        draft.reasoningAmbiguous=cleaned.ambiguous;
+        draft.preset=preset.name;draft.compressionSource=source;return draft;
     }
     async generateSummary(start,end,{allowOverlap=false,replaceId=null}={}) {
         return this.run(async()=>{
@@ -489,7 +497,7 @@ export class Engine {
                 const ordered=narrativeOrder(memoryEntries(plan.archive.entries),plan.archive.entries,s.chat),text=memoryText(plan.archive.entries,candidateSettings,ordered.entries),tokens=await bounded(()=>this.host.count(text),this.policy().tokensTimeout);this.assert(s);
                 const limits=this.host.limits();if(memoryConflicts(plan.archive.entries,s.key).length)throw Error('Восстановление активности создаёт пересечения памяти. Восстановите записи без активности.');
                 if(importedSourceConflicts(plan.archive.entries,s.chat).length)throw Error('В текущем чате уже есть исходные сообщения копии. Восстановите без активности или сначала вручную исключите эти сообщения штатными средствами SillyTavern.');
-                if(!Number.isFinite(tokens)||tokens>candidateSettings.tokenLimit||text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context))throw Error('Активная копия превышает лимит токенов или контекст модели. Восстановите без активности либо измените лимит.');
+                if(!Number.isFinite(tokens)||tokens>candidateSettings.tokenLimit||text&&(!Number.isFinite(limits.context)||tokens>=limits.context))throw Error('Активная копия превышает лимит токенов или контекст модели. Восстановите без активности либо измените лимит.');
             }
             this.assert(s);if(stamp!==JSON.stringify([s.metadata[KEY]??null,settings]))throw Error('Память или настройки изменились во время проверки. Повторите восстановление.');
             // A durable marker blocks all injection until both complete-archive writes verify.
@@ -532,9 +540,9 @@ export class Engine {
         const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>this.host.count(text));this.assert(s);
         const sources=trace({code:'MEM-008',stage:'sources'},()=>memorySources(entries,s.chat,s.key,ordered.entries));
         const conflicts=trace({code:'MEM-003',stage:'hierarchy'},()=>memoryConflicts(entries,s.key)),sourceConflicts=trace({code:'MEM-008',stage:'sources'},()=>importedSourceConflicts(entries,s.chat).filter(c=>!sources.episodes.has(c.entryId))),enabled=settings.enabled&&settings.inject;
-        const limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits()),modelOverflow=!!text&&(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||tokens+limits.output+256>limits.context);
+        const limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits()),modelOverflow=!!text&&(!Number.isFinite(limits.context)||tokens>=limits.context);
         const blocked=enabled&&(!!this.restoring||!!archive.pending||sourceConflicts.length>0||tokens>settings.tokenLimit||conflicts.length>0||!Number.isFinite(tokens)||modelOverflow);
-        const diagnostic=this.restoring||archive.pending?{code:'MEM-002',stage:'active',reason:'pending'}:sourceConflicts.length?{code:'MEM-010',stage:'sources',reason:'source-duplicate'}:conflicts.length?{code:'MEM-010',stage:'hierarchy',reason:'memory-overlap'}:!Number.isFinite(tokens)?{code:'MEM-005',stage:'tokens',reason:'count-invalid'}:!Number.isFinite(limits.context)||!Number.isFinite(limits.output)?{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'}:modelOverflow?{code:'MEM-005',stage:'tokens',reason:'context-local'}:{code:'MEM-005',stage:'tokens',reason:'memory-limit'};
+        const diagnostic=this.restoring||archive.pending?{code:'MEM-002',stage:'active',reason:'pending'}:sourceConflicts.length?{code:'MEM-010',stage:'sources',reason:'source-duplicate'}:conflicts.length?{code:'MEM-010',stage:'hierarchy',reason:'memory-overlap'}:!Number.isFinite(tokens)?{code:'MEM-005',stage:'tokens',reason:'count-invalid'}:!Number.isFinite(limits.context)?{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'}:modelOverflow?{code:'MEM-005',stage:'tokens',reason:'context-local'}:{code:'MEM-005',stage:'tokens',reason:'memory-limit'};
         return {text,tokens,conflicts,sourceConflicts,sourceIds:sources.ids,blocked,enabled,diagnostic,placement:Number(settings.position),limitExceeded:tokens>settings.tokenLimit||modelOverflow,entries:ordered.entries,orderWarnings:ordered.warnings,reason:this.restoring?'Восстановление памяти ожидает подтверждения сохранения.':archive.pending?'Есть незавершённая операция памяти. Завершите её или восстановите исходники в настройках.':sourceConflicts.length?'Восстановленная память повторяет исходные сообщения текущего чата. Отключите её или вручную исключите эти сообщения штатными средствами SillyTavern.':conflicts.length?'Активные воспоминания пересекаются. Отключите дублирующую запись.':modelOverflow?'Активная память с резервом ответа не помещается в контекст текущей модели. Отключите часть записей либо увеличьте лимит.':`Память занимает ≈${tokens} токенов при лимите ${settings.tokenLimit}. Отключите часть записей или увеличьте лимит.`};
     }
     async prepareContext(request,type='normal',{deferDelivery=false}={}) {

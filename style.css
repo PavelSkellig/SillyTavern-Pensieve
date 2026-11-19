@@ -514,3 +514,63 @@
 @media(max-width:600px){#pensieve-panel .pv-reduction-tokens,#pensieve-panel .pv-reduction-delta{white-space:normal;overflow-wrap:normal;word-break:normal}#pensieve-panel .pv-reduction-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 
 #pensieve-panel .pv-basic-options{min-width:0;width:100%;box-sizing:border-box}#pensieve-panel .pv-basic-options>h4{margin:12px 0 5px;font:600 17px/1.4 Georgia,serif}#pensieve-panel .pv-basic-options>label:has(>input[type="checkbox"]){display:flex;flex-direction:row;align-items:center;gap:8px;min-height:36px;cursor:pointer}
+
+.pensieve .pv-placement-macro {
+    margin-top: 9px;
+    padding: 8px 12px;
+    border: 1px solid var(--pv-line);
+    border-radius: 8px;
+    background: var(--pv-panel);
+}
+.pensieve .pv-placement-macro .pv-row { justify-content: space-between; }
+.pensieve .pv-placement-macro p { margin: 3px 0; }
+.pensieve .pv-draft-indicator { display: block; color: var(--pv-bronze); }
+#pensieve-panel[data-theme="light"] .pv-tabs > button[aria-current="page"] {
+    background: var(--pv-active);
+    color: var(--pv-text);
+}
+@media (max-width: 600px) {
+    #pensieve-panel:not(.pv-keyboard-open) {
+        --pv-panel-top: calc(var(--topBarBlockSize, 40px) + 6px);
+        --pv-panel-bottom: calc(max(var(--pv-composer-height, 52px), 44px) + 6px);
+        inset: var(--pv-panel-top) 0 var(--pv-panel-bottom);
+        height: calc(100dvh - var(--pv-panel-top) - var(--pv-panel-bottom));
+        max-height: calc(100dvh - var(--pv-panel-top) - var(--pv-panel-bottom));
+    }
+    #pensieve-panel > .pv-tabs {
+        display: grid;
+        grid-template-columns: .9fr .85fr .92fr 1.08fr 1.25fr;
+        gap: 2px;
+        padding-inline: 3px;
+        overflow: hidden;
+    }
+    #pensieve-panel > .pv-tabs > button {
+        min-width: 0;
+        padding: 6px 1px;
+        font-size: clamp(10px, 2.8vw, 13px);
+    }
+    #pensieve-panel .pv-tabs .pv-tab-icon { display: none; }
+    .pensieve textarea, .pensieve input[type="number"] { font-size: 16px; }
+    #pensieve-panel.pv-keyboard-open, .pensieve.pv-editor.pv-keyboard-open {
+        position: fixed;
+        top: var(--pv-visible-top, 0px);
+        bottom: auto;
+        margin: 0 auto;
+        max-height: calc(var(--pv-visible-height, 100dvh) - 8px);
+    }
+    #pensieve-panel.pv-keyboard-open > .pv-hero {
+        min-height: 64px;
+        height: 64px;
+    }
+    #pensieve-panel.pv-keyboard-open > .pv-hero > .pv-hero-overlay {
+        inset: auto 5px 4px;
+        padding: 3px 7px;
+    }
+    #pensieve-panel.pv-keyboard-open .pv-brand h2 { font-size: 17px; }
+    #pensieve-panel.pv-keyboard-open .pv-footer { display: none; }
+    .pensieve.pv-editor.pv-keyboard-open .pv-content {
+        max-height: calc(var(--pv-visible-height, 100dvh) - 72px);
+        min-height: 0;
+    }
+    .pensieve.pv-keyboard-open textarea { min-height: min(140px, 35vh); }
+}
