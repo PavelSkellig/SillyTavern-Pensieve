@@ -613,29 +613,106 @@ export class UI {
     }
     saveSettings() {this.e.host.context().saveSettingsDebounced();this.schedule();}
     memoryPlacementView(section,settings) {
-        const options=el('div',{class:'pv-placement-options'}),inChat=el('div',{class:'pv-placement-details'}),macro=el('div',{class:'pv-placement-macro'});
-        const update=()=>{inChat.hidden=Number(settings.position)!==1;macro.hidden=Number(settings.position)!==-1;};
-        for(const [value,title]of [[-1,'Никуда — только макрос'],[2,'Перед основным промптом'],[0,'После основного промпта'],[1,'Внутри чата']]){
+        section.classList.add('pv-memory-placement');
+        const modes=[
+            [-1,'Никуда — только макрос'],
+            [2,'Перед основным промптом'],
+            [0,'После основного промпта'],
+            [1,'Внутри чата'],
+        ];
+        const options=el('div',{class:'pv-placement-options',role:'radiogroup','aria-labelledby':'pv-placement-label'});
+        const macro=el('div',{class:'pv-placement-card pv-placement-macro'});
+        const automatic=el('div',{class:'pv-placement-card'});
+        const inChat=el('div',{class:'pv-placement-card'});
+        const automaticIcon=el('i',{'aria-hidden':'true'});
+        const automaticHeading=el('h4');
+        const automaticHelp=el('p',{class:'pv-muted'});
+        const caption=el('div',{class:'pv-placement-caption'});
+        caption.append(automaticIcon,el('span',{},'Автоматическая подстановка'));
+        automatic.append(caption,automaticHeading,automaticHelp,
+            el('p',{class:'pv-muted'},'Для этого режима макрос и настройка шаблона не нужны.'));
+
+        const copyStatus=el('small',{role:'status'});
+        const macroText='{{memory_echo}}';
+        const copyButton=iconButton('Копировать',async()=>{
+            await copy(macroText);
+            if(!macro.hidden)copyStatus.textContent='Макрос скопирован.';
+        },'fa-copy');
+        const macroRow=el('div',{class:'pv-placement-macro-row'});
+        macroRow.append(el('code',{},macroText),copyButton);
+        macro.append(el('h4',{},'Макрос для пресета SillyTavern'),macroRow,
+            el('p',{class:'pv-muted'},'Вставь макрос в свой пресет SillyTavern. Автоматической подстановки в этом режиме нет.'),copyStatus);
+
+        const update=()=>{
+            const position=Number(settings.position);
+            macro.hidden=position!==-1;
+            inChat.hidden=position!==1;
+            automatic.hidden=position!==2&&position!==0;
+            copyStatus.textContent='';
+            if(!automatic.hidden){
+                const before=position===2;
+                automaticIcon.className='fa-solid '+(before?'fa-arrow-up':'fa-arrow-down');
+                automaticHeading.textContent=modes.find(([value])=>value===position)[1];
+                automaticHelp.textContent=before
+                    ? 'Воспоминания автоматически добавляются перед основным промптом.'
+                    : 'Воспоминания автоматически добавляются после основного промпта.';
+            }
+        };
+        for(const [value,title] of modes){
             const radio=el('input',{type:'radio',name:'pensieve-memory-position',value,'aria-label':title});
             radio.checked=Number(settings.position)===value;
-            radio.onchange=()=>{if(radio.checked){settings.position=value;update();this.saveSettings();}};
+            radio.onchange=()=>{
+                if(!radio.checked)return;
+                settings.position=value;
+                update();
+                this.saveSettings();
+            };
             const label=el('label');label.append(radio,el('span',{},title));options.append(label);
         }
-        const status=el('small',{role:'status'});
-        macro.append(el('strong',{},'Макрос для пресета SillyTavern'),row(el('code',{},'{{memory_echo}}'),button('Копировать',async()=>{await copy('{{memory_echo}}');status.textContent='Макрос скопирован.';})),el('p',{class:'pv-muted'},'Вставь макрос в свой пресет SillyTavern. Автоматической подстановки в этом режиме нет.'),status);
-        const depth=el('input',{type:'number',min:0,max:10000,step:1,value:settings.depth,'aria-label':'Глубина вставки'});
-        const depthStatus=el('p',{class:'pv-muted',role:'status'},'0 — в конце истории; 4 — перед последними четырьмя сообщениями.');
-        depth.onchange=()=>{const n=depth.valueAsNumber;if(!Number.isInteger(n)||n<0||n>10000){depth.value=settings.depth;depthStatus.textContent='Введите целое число от 0 до 10 000.';return;}settings.depth=n;depthStatus.textContent='0 — в конце истории; 4 — перед последними четырьмя сообщениями.';this.saveSettings();};
-        const role=el('select',{'aria-label':'Роль сообщения'});
-        for(const [value,title]of [[0,'System'],[1,'User'],[2,'Assistant']])role.append(el('option',{value},title));
+        const depth=el('input',{id:'pv-placement-depth',type:'number',min:0,max:10000,step:1,value:settings.depth,'aria-describedby':'pv-placement-depth-help'});
+        const depthHelp=el('p',{id:'pv-placement-depth-help',class:'pv-muted'},'Глубина 0 — после последнего сообщения, 1 — перед последним.');
+        const depthStatus=el('small',{role:'status'});
+        depth.onchange=()=>{
+            const value=depth.valueAsNumber;
+            if(!Number.isInteger(value)||value<0||value>10000){
+                depth.value=settings.depth;
+                depthStatus.textContent='Введите целое число от 0 до 10 000.';
+                return;
+            }
+            depthStatus.textContent='';
+            if(Number(settings.depth)===value)return;
+            settings.depth=value;
+            this.saveSettings();
+        };
+        const step=(sign,label,delta)=>{
+            const control=button(sign,()=>{
+                const value=Math.max(0,Math.min(10000,Number(settings.depth)+delta));
+                if(!Number.isFinite(value))return;
+                depth.value=String(value);
+                depth.onchange();
+            });
+            control.setAttribute('aria-label',label);
+            return control;
+        };
+        const depthControl=el('div',{class:'pv-placement-number'});
+        depthControl.append(depth,step('−','Уменьшить глубину',-1),step('+','Увеличить глубину',1));
+        const depthField=el('div');
+        depthField.append(el('label',{for:'pv-placement-depth'},'Глубина'),depthControl);
+        const role=el('select',{id:'pv-placement-role'});
+        for(const [value,title] of [[0,'Система'],[1,'Пользователь'],[2,'Ассистент']])role.append(el('option',{value},title));
         role.value=settings.role;role.onchange=()=>{settings.role=Number(role.value);this.saveSettings();};
-        inChat.append(field('Глубина вставки',depth),field('Роль сообщения',role),depthStatus);
-        update();section.append(options,macro,inChat);
+        const roleField=el('div');
+        roleField.append(el('label',{for:'pv-placement-role'},'Роль сообщения'),role);
+        const fields=el('div',{class:'pv-placement-fields'});
+        fields.append(depthField,roleField);
+        inChat.append(el('h4',{},'Параметры вставки в чат'),fields,depthHelp,depthStatus);
+        update();
+        section.append(el('p',{id:'pv-placement-label',class:'pv-placement-label'},'Куда вставлять память'),options,macro,automatic,inChat);
     }
     settingsView(archive) {
         const settings=this.e.settings();this.content.append(el('h3',{class:'pv-view-heading'},'Настройки'));
         const group=(title,target=this.content)=>{const section=el('fieldset',{class:'pv-setting-group'});section.append(el('legend',{},title));target.append(section);return section;};
-        const basic=group('Основные настройки'),memory=el('div',{class:'pv-basic-options'}),messages=el('div',{class:'pv-basic-options'}),appearance=el('div',{class:'pv-basic-options'});messages.append(el('h4',{},'Создание глав'));appearance.append(el('h4',{},'Интерфейс'));basic.append(memory,messages,appearance);const placement=group('Подстановка памяти (Memory Echo)'),maintenance=el('details',{class:'pv-maintenance'});maintenance.append(el('summary',{},'Обслуживание'));this.content.append(maintenance);const archiveGroup=group('Резервные копии',maintenance);
+        const basic=group('Основные настройки'),memory=el('div',{class:'pv-basic-options'}),messages=el('div',{class:'pv-basic-options'}),appearance=el('div',{class:'pv-basic-options'});messages.append(el('h4',{},'Создание глав'));appearance.append(el('h4',{},'Интерфейс'));basic.append(memory,messages,appearance);const placement=group('Подстановка памяти'),maintenance=el('details',{class:'pv-maintenance'});maintenance.append(el('summary',{},'Обслуживание'));this.content.append(maintenance);const archiveGroup=group('Резервные копии',maintenance);
         this.memoryPlacementView(placement,settings);
         const preview=el('input',{type:'checkbox',checked:settings.previewEpisodes,'aria-label':'Предпросмотр глав'});preview.onchange=()=>{settings.previewEpisodes=preview.checked;this.saveSettings();};const previewLabel=el('label');previewLabel.append(preview,document.createTextNode('Предпросмотр глав'));messages.append(previewLabel,el('p',{class:'pv-muted'},'Показывать готовую главу перед сохранением. Если выключено, успешный результат ручной генерации сохраняется сразу.'));
         for(const [key,title]of [['enabled','Включить расширение'],['inject','Внедрять активную память'],['exclude','Исключать обработанные сообщения после сохранения'],['collapse','Визуально сворачивать обработанные сообщения'],['showMessageLabels','Метки глав, частей и томов под сообщениями'],['pastNoteEnabled','Не акцентировать прошлые события без необходимости']]){

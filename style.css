@@ -438,8 +438,158 @@
 .pensieve.pv-generation-window progress{display:block;height:12px;margin:12px 0;accent-color:#b79c73}
 .pensieve.pv-generation-window .pv-content>button{width:100%;margin:5px 0}
 
-/* Native placement choices, scoped to Pensieve. */
-.pensieve .pv-placement-options{display:grid;gap:6px;min-width:0}.pensieve .pv-placement-options label{display:flex;align-items:center;gap:10px;margin:0;padding:9px 8px;border:1px solid var(--pv-line);border-radius:7px;background:var(--pv-bg);cursor:pointer}.pensieve .pv-placement-options input[type="radio"]{width:18px;height:18px;flex:0 0 18px;margin:0;padding:0;accent-color:var(--pv-bronze)}.pensieve .pv-placement-options span{min-width:0}.pensieve .pv-placement-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}.pensieve .pv-placement-details>p{grid-column:1/-1}.pensieve .pv-placement-details[hidden]{display:none!important}
+/* Memory placement cards use the panel theme and native form controls. */
+.pensieve .pv-memory-placement {
+    padding: 4px 0 0;
+    border: 0;
+    background: transparent;
+}
+.pensieve .pv-memory-placement legend { padding-inline: 8px; }
+.pensieve .pv-memory-placement .pv-placement-label {
+    margin: 0 8px 7px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--pv-muted);
+}
+.pensieve .pv-placement-options,
+.pensieve .pv-placement-card {
+    border: 1px solid var(--pv-line);
+    border-radius: 10px;
+    padding-inline: 11px;
+    min-width: 0;
+}
+.pensieve .pv-placement-options { background: var(--pv-record, var(--pv-panel)); }
+.pensieve .pv-placement-options label {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    margin: 0;
+    padding-block: 8px;
+    min-height: 42px;
+    border-bottom: 1px solid var(--pv-line);
+    font-size: 14px;
+    color: var(--pv-muted);
+    overflow-wrap: normal;
+    cursor: pointer;
+}
+.pensieve .pv-placement-options label:last-child { border-bottom: 0; }
+.pensieve .pv-placement-options input[type="radio"] {
+    flex: 0 0 17px;
+    width: 17px;
+    height: 17px;
+    margin: 0 3px;
+    padding: 0;
+    accent-color: var(--pv-bronze);
+}
+.pensieve .pv-placement-options input:checked + span {
+    color: var(--pv-text);
+    font-weight: 700;
+}
+.pensieve .pv-placement-card {
+    margin-top: 10px;
+    padding-block: 11px;
+    background: var(--pv-panel);
+}
+.pensieve .pv-placement-card h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--pv-text);
+}
+.pensieve .pv-placement-card p { margin: 7px 0 0; }
+.pensieve .pv-placement-card small:empty { display: none; }
+.pensieve .pv-placement-caption {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: var(--pv-bronze);
+    font-size: 12px;
+    font-weight: 700;
+}
+.pensieve .pv-placement-caption i {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
+    border: 1px solid var(--pv-bronze);
+    border-radius: 6px;
+    background: var(--pv-bg);
+}
+.pensieve .pv-placement-macro-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding: 6px 8px;
+    border: 1px solid var(--pv-line);
+    border-radius: 8px;
+    background: var(--pv-bg);
+}
+.pensieve .pv-placement-macro-row code {
+    color: var(--pv-text);
+    font-size: clamp(13px, 3.4vw, 16px);
+    font-weight: 700;
+    white-space: nowrap;
+}
+.pensieve .pv-placement-macro-row button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 40px;
+    margin: 0;
+    padding: 4px 7px;
+    border: 1px solid var(--pv-bronze);
+    white-space: nowrap;
+}
+.pensieve .pv-placement-macro-row i { color: var(--pv-bronze); }
+.pensieve .pv-placement-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.pensieve .pv-placement-fields label {
+    margin: 0 0 4px;
+    color: var(--pv-muted);
+    overflow-wrap: normal;
+}
+.pensieve .pv-placement-number {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--pv-line);
+    border-radius: 7px;
+    background: var(--pv-bg);
+}
+.pensieve .pv-placement-number input[type="number"],
+.pensieve .pv-placement-fields select {
+    min-height: 42px;
+    margin: 0;
+    padding: 6px 7px;
+    font-size: 16px;
+}
+.pensieve .pv-placement-number input[type="number"] {
+    flex: 1 1 0;
+    width: 0;
+    border: 0;
+    appearance: textfield;
+}
+.pensieve .pv-placement-number input::-webkit-inner-spin-button,
+.pensieve .pv-placement-number input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.pensieve .pv-placement-number button {
+    flex: 0 0 27px;
+    min-height: 42px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--pv-bronze);
+    font-size: 16px;
+}
+@media (max-width: 340px) {
+    .pensieve .pv-placement-fields { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Shared generation preset controls stay within the existing mobile workspace. */
 #pensieve-panel .pv-preset-toolbar{display:grid;gap:8px;min-width:0;width:100%;box-sizing:border-box}#pensieve-panel .pv-preset-toolbar>label{min-width:0}#pensieve-panel .pv-preset-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}#pensieve-panel .pv-preset-actions button{min-width:0;width:100%;padding:7px 5px;white-space:normal;overflow-wrap:normal;word-break:normal}#pensieve-panel .pv-preset-more{margin-top:8px}#pensieve-panel .pv-preset-more>.pv-row{margin-top:8px}
@@ -515,15 +665,6 @@
 
 #pensieve-panel .pv-basic-options{min-width:0;width:100%;box-sizing:border-box}#pensieve-panel .pv-basic-options>h4{margin:12px 0 5px;font:600 17px/1.4 Georgia,serif}#pensieve-panel .pv-basic-options>label:has(>input[type="checkbox"]){display:flex;flex-direction:row;align-items:center;gap:8px;min-height:36px;cursor:pointer}
 
-.pensieve .pv-placement-macro {
-    margin-top: 9px;
-    padding: 8px 12px;
-    border: 1px solid var(--pv-line);
-    border-radius: 8px;
-    background: var(--pv-panel);
-}
-.pensieve .pv-placement-macro .pv-row { justify-content: space-between; }
-.pensieve .pv-placement-macro p { margin: 3px 0; }
 .pensieve .pv-draft-indicator { display: block; color: var(--pv-bronze); }
 #pensieve-panel[data-theme="light"] .pv-tabs > button[aria-current="page"] {
     background: var(--pv-active);
