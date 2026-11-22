@@ -37,6 +37,19 @@ export function captureRange(chat, start, end) {
 }
 export const sourceText = range => range.map(s=>`${s.name}:\n${s.text}`).join('\n\n');
 export const sourceRecord = s => ({id:s.id,hash:s.hash,index:s.index,previousHidden:s.previousHidden});
+export const chapterRangeKey=range=>range.length&&range.every(source=>source.id&&source.hash)
+    ? fingerprint({name:'chapter-range',mes:JSON.stringify(range.map(({id,hash})=>[id,hash]))})
+    : null;
+
+export function validateChapterSlots(slots){
+    if(!Array.isArray(slots)||slots.length>10000)throw Error('Некорректный список освободившихся номеров глав.');
+    const seen=new Set();
+    return slots.map(slot=>{
+        if(!slot||!Number.isSafeInteger(slot.number)||slot.number<1||!/^[a-f0-9]{32}$/.test(slot.rangeKey)||seen.has(slot.number))throw Error('Некорректный свободный номер главы.');
+        seen.add(slot.number);
+        return {number:slot.number,rangeKey:slot.rangeKey};
+    });
+}
 
 export function inspectSources(chat, sources) {
     const byId=new Map();
@@ -110,12 +123,14 @@ export function validateArchive(input) {
         if(e.origin!==undefined&&(!e.origin||typeof e.origin!=='object'||Array.isArray(e.origin)||typeof e.origin.chat!=='string'||!e.origin.chat||e.origin.chat.length>10000||typeof e.origin.id!=='string'||!e.origin.id||e.origin.id.length>200))throw Error('Повреждено происхождение записи.');
         if(e.sourceChat!==undefined&&(typeof e.sourceChat!=='string'||!e.sourceChat||e.sourceChat.length>10000)||e.detachedSources!==undefined&&typeof e.detachedSources!=='boolean'||e.backupActive!==undefined&&typeof e.backupActive!=='boolean')throw Error('Повреждены сведения об источнике записи.');
         if(!Number.isFinite(e.order)||!Number.isInteger(e.version)||e.version<1||typeof e.active!=='boolean'||!Array.isArray(e.sources)||!Array.isArray(e.summaryIds)||!Array.isArray(e.history))throw Error('Некорректные поля записи.');
+        if(e.chapterNumber!==undefined&&(e.type!=='summary'||!Number.isSafeInteger(e.chapterNumber)||e.chapterNumber<1))throw Error('Некорректный номер главы.');
         const sources=e.sources.map(s=>{
             if(!s||typeof s.id!=='string'||!s.id||typeof s.hash!=='string'||!/^[a-f0-9]{32}$/.test(s.hash)||!Number.isInteger(s.index)||s.index<0||typeof s.previousHidden!=='boolean')throw Error('Некорректные источники записи.');
             return {id:s.id,hash:s.hash,index:s.index,previousHidden:s.previousHidden};
         });
         if(e.type==='summary'&&e.summaryIds.length||e.type==='arc'&&(e.sources.length||e.summaryIds.length<2)||e.type!=='volume'&&e.chapterIds?.length||e.type==='volume'&&(e.sources.length||e.summaryIds.length||!Array.isArray(e.chapterIds)||e.chapterIds.length<2))throw Error('Неверные связи записи.');
         return {id,type:e.type,title:requireText(e.title,'title',2000),text:requireText(e.text,'text'),order:e.order,active:e.active,version:e.version,
+            ...(e.chapterNumber!==undefined?{chapterNumber:e.chapterNumber}:{}),
             createdAt:requireText(e.createdAt,'createdAt',100),updatedAt:requireText(e.updatedAt??e.createdAt,'updatedAt',100),sources,
             summaryIds:e.summaryIds.map(id=>requireText(id,'summaryId',200)),
             ...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>requireText(id,'chapterId',200))}:{}),
@@ -127,6 +142,7 @@ export function validateArchive(input) {
     });
     const byId=new Map(archive.entries.map(e=>[e.id,e]));
     for(const e of archive.entries)if(e.type!=='summary'){const links=childrenIds(e);if(new Set(links).size!==links.length||links.some(id=>byId.get(id)?.type!==LEVELS[e.type].sourceType))throw Error('Неверные, отсутствующие или повторяющиеся источники части или тома.');}
+    if(input.chapterSlots!==undefined)archive.chapterSlots=validateChapterSlots(input.chapterSlots);
     archive.revision=Number.isInteger(input.revision)?input.revision:0;
     if(bytes(archive)>MAX_ARCHIVE_BYTES)throw Error('Архив превышает безопасный предел 20 MiB. Разделите резервную копию.');
     return archive;

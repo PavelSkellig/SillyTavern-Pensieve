@@ -107,11 +107,12 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
                 const data=await trace({code:'GEN-001',stage:'api',snapshot:{macroUsed:false,generation:'running'}},()=>Promise.race([c.generateRawData({api,prompt:[{role:'user',content:nonce}],systemPrompt:'',instructOverride:true,quietToLoud:true,responseLength}),stopped]));
                 if(!applied)throw tagError(Error('SillyTavern не применил буквальный пользовательский промпт. Генерация не сохранена.'),{code:'GEN-005',stage:'response',reason:'literal-hook'});
                 const reason=data?.choices?.[0]?.finish_reason??data?.stop_reason??data?.candidates?.[0]?.finishReason;
-                const truncated=['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason);
+                const interrupted=data?.incomplete_details!=null||data?.status==='incomplete'||['error','cancelled','canceled','interrupted'].includes(reason);
+                const truncated=interrupted||['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason);
                 if(['content_filter','safety','SAFETY','refusal'].includes(reason))throw tagError(Error('Модель остановила ответ фильтром. Исходники не изменены.'),{code:'GEN-008',stage:'response',reason:'refused'});
                 const text=trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));
                 if(truncated&&!text?.trim())throw tagError(Error('Ответ модели был обрезан до появления текста.'),{code:'GEN-007',stage:'response',reason:'truncated'});
-                return {text,truncated};
+                return {text,truncated,interrupted};
             } finally {cancelCurrent=null;c.eventSource.removeListener(c.eventTypes.GENERATION_STOPPED,nativeCancel);c.eventSource.removeListener(event,literal);}
         },
         save:()=>trace({stage:'save'},()=>context().saveMetadata()),

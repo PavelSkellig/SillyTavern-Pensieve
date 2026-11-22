@@ -19,13 +19,14 @@ export function hierarchyIndex(entries) {
 }
 const titlePrefix=level=>`(?:${[level.name,...(level.legacy??[])].join('|')})`;
 export function entryNumber(entry,allEntries) {
+    if(entry.type==='summary'&&Number.isSafeInteger(entry.chapterNumber)&&entry.chapterNumber>0)return String(entry.chapterNumber);
     const level=LEVELS[entry.type],prefix=titlePrefix(level);
     return entry.title.match(new RegExp(`^${prefix}\\s*№\\s*(\\d+)`,'i'))?.[1]??String(allEntries.filter(e=>e.type===entry.type).findIndex(e=>e.id===entry.id)+1);
 }
 export function displayTitle(entry,allEntries) {
     const level=LEVELS[entry.type],prefix=titlePrefix(level);
     const matched=entry.title.match(new RegExp(`^${prefix}\\s*№\\s*(\\d+)([\\s\\S]*)$`,'i'));
-    return matched?`${level.name} №${matched[1]}${matched[2]}`:`${level.name} №${entryNumber(entry,allEntries)} — ${entry.title}`;
+    return matched?`${level.name} №${entryNumber(entry,allEntries)}${matched[2]}`:`${level.name} №${entryNumber(entry,allEntries)} — ${entry.title}`;
 }
 export const relationLabel=(parent,allEntries)=>`Входит в ${parent.type==='volume'?'том':'часть'} №${entryNumber(parent,allEntries)}`;
 export function nextNumber(type,allEntries) {

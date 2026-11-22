@@ -1,5 +1,5 @@
 import {guardAction} from './diagnostics-view.js';
-import {tagError,describeError} from './diagnostics.js';
+import {tagError,describeError,errorMeta} from './diagnostics.js';
 import {LEVELS} from './hierarchy.js';
 
 const labels={summary:{making:'глава',ready:'Глава готова'},arc:{making:'часть',ready:'Часть готова'},volume:{making:'том',ready:'Том готов'}};
@@ -104,7 +104,7 @@ export class GenerationView {
             job.noticeCovered=false;if(job.phase==='generate')job.draft=await job.fn();
             if(!this.current(job))return null;
             this.assert(job);const draft=job.draft;job.type=draft.type;
-            if(job.phase==='save'||draft.type==='summary'&&!this.engine.settings().previewEpisodes&&!draft.truncated&&!draft.reasoningAmbiguous){
+            if(job.phase==='save'||draft.type==='summary'&&!draft.replaceId&&!this.engine.settings().previewEpisodes&&!draft.truncated&&!draft.reasoningAmbiguous){
                 job.phase='save';job.status='saving';this.paint(job);
                 await this.save(job);
                 if(!this.current(job))return null;
@@ -116,7 +116,10 @@ export class GenerationView {
             return draft;
         }catch(error){
             if(!this.current(job))return null;
-            const presentation=job.phase==='preview',record=this.engine.host.report?.(error,presentation?{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}:{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);this.onError(record);this.minimize(job);this.paint(job);if(presentation)return job.draft;throw error;
+            const presentation=job.phase==='preview',record=this.engine.host.report?.(error,presentation?{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'}:{operation:job.phase==='save'?'save-'+job.type:'generate-'+job.type});job.status='error';job.errorMessage=record?describeError(record).brief:error?.message??String(error);if(errorMeta(error).code==='GEN-001'){
+                job.errorMessage+='\nГенерация прервана. SillyTavern не вернул пригодный черновик. Повторите запрос.';
+            }
+            this.onError(record);this.minimize(job);this.paint(job);if(presentation)return job.draft;throw error;
         }
     }
     showPreview(job) {

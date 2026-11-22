@@ -28,11 +28,15 @@ const id=value=>typeof value==='string'&&!!value&&value.length<=200;
 const exclusionValid=value=>value===null||value&&typeof value==='object'&&typeof value.previousHidden==='boolean'&&Array.isArray(value.owners)&&value.owners.every(id)&&new Set(value.owners).size===value.owners.length;
 const stateValid=(states,sources)=>Array.isArray(states)&&states.length<=sources.length&&new Set(states.map(s=>s?.id)).size===states.length&&states.every(s=>s&&sources.includes(s.id)&&typeof s.hidden==='boolean'&&exclusionValid(s.exclusion));
 const valid=note=>{
- const fields=['version','owner','operationId','entryId','entryVersion','base','archive','createdAt','intent','sourceState','previousActive','write'];
+ const fields=['version','owner','operationId','entryId','entryVersion','base','archive','createdAt','intent','sourceState','previousActive','write','deleteChat'];
  if(!note||note.version!==1||typeof note.owner!=='string'||!note.owner||!id(note.operationId)||!id(note.entryId)||!Number.isSafeInteger(note.entryVersion)||note.entryVersion<1||typeof note.base!=='string'||!(note.base==='legacy'||/^[a-f0-9]{32}$/.test(note.base))||typeof note.createdAt!=='string'||note.createdAt.length>100||!Number.isFinite(Date.parse(note.createdAt))||bytes(note)>MAX_ARCHIVE_BYTES*2||Object.keys(note).some(k=>!fields.includes(k)))throw invalid();
  validateArchive(note.archive);const a=note.archive,p=a.pending,e=a.entries.find(e=>e.id===note.entryId&&e.version===note.entryVersion);
- if(a.owner!==note.owner||!p||!e||p.entryId!==note.entryId||p.operationId!==note.operationId||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(p.type)||Object.keys(p).some(k=>!['type','entryId','operationId'].includes(k))||note.intent!==undefined&&note.intent!=='restore')throw invalid();
- const sources=e.sources.map(s=>s.id);
+ const deletion=note.intent==='delete';
+ if(a.owner!==note.owner||!p||p.entryId!==note.entryId||p.operationId!==note.operationId||Object.keys(p).some(k=>!['type','entryId','operationId'].includes(k)))throw invalid();
+ if(deletion){
+  if(p.type!=='delete'||a.entries.some(entry=>entry.id===note.entryId)||!/^[a-f0-9]{32}$/.test(note.deleteChat)||!Array.isArray(note.sourceState)||!note.sourceState.every(state=>id(state?.id)&&!state.exclusion?.owners?.includes(note.entryId))||note.previousActive?.length!==0)throw invalid();
+ }else if(!e||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(p.type)||note.intent!==undefined&&note.intent!=='restore'||note.deleteChat!==undefined)throw invalid();
+ const sources=deletion?note.sourceState.map(state=>state.id):e.sources.map(s=>s.id);
  if(!stateValid(note.sourceState,sources)||note.sourceState.length!==sources.length||!Array.isArray(note.previousActive)||new Set(note.previousActive.map(x=>x?.id)).size!==note.previousActive.length||!note.previousActive.every(x=>x&&id(x.id)&&typeof x.active==='boolean'&&Number.isSafeInteger(x.version)&&x.version>0&&a.entries.some(e=>e.id===x.id)))throw invalid();
  if(note.write&&(!id(note.write.id)||!['pending','settled'].includes(note.write.state)||!['save','hide','unhide'].includes(note.write.kind)||!(/^[a-f0-9]{32}$/.test(note.write.archive))||!(/^[a-f0-9]{32}$/.test(note.write.chat))||!stateValid(note.write.sources,sources)))throw invalid();
  return clone(note);
@@ -65,10 +69,25 @@ export class SaveJournal {
  writeHeld(key){return this.storage.writeHeld?this.storage.writeHeld(key):Promise.resolve(false);}
  settle(owner,operationId,writeId,key=this.key(owner)){return this.atomic(key,raw=>{const note=this.read(raw,owner);if(note?.operationId!==operationId||note.write?.id!==writeId)return {};note.write.state='settled';return {put:note};});}
 }
-export function captureSourceState(entry,chat){const matches=new Map(chat.map(m=>[m.extra?.[KEY]?.id,m]));return entry.sources.map(s=>{const m=matches.get(s.id);return {id:s.id,hidden:s.previousHidden,exclusion:clone(m?.extra?.[KEY]?.exclusion??null)};});}
+export function captureSourceState(entry,chat,liveVisibility=false){const matches=new Map(chat.map(m=>[m.extra?.[KEY]?.id,m]));return entry.sources.map(s=>{const m=matches.get(s.id);return {id:s.id,hidden:liveVisibility&&m?!!m.is_system:s.previousHidden,exclusion:clone(m?.extra?.[KEY]?.exclusion??null)};});}
 export function expectedSourceState(note,restoring=false){const e=note.archive.entries.find(e=>e.id===note.entryId),hide=note.archive.pending.type==='hide';return note.sourceState.map(s=>{let exclusion=clone(s.exclusion),hidden=s.hidden;if(restoring){if(exclusion){exclusion.owners=exclusion.owners.filter(id=>id!==e.id);hidden=exclusion.owners.length?true:exclusion.previousHidden;if(!exclusion.owners.length)exclusion=null;}}else if(hide){hidden=true;if(exclusion){if(!exclusion.owners.includes(e.id))exclusion.owners.push(e.id);}else if(!s.hidden)exclusion={owners:[e.id],previousHidden:false};}return {id:s.id,hidden,exclusion};});}
 export function sourceProof(chat,entry,override=new Map()){const matches=new Map(chat.map(m=>[m.extra?.[KEY]?.id,m]));return entry.sources.flatMap(s=>{const m=matches.get(s.id);return m?[{id:s.id,hidden:override.has(s.id)?override.get(s.id):!!m.is_system,exclusion:clone(m.extra?.[KEY]?.exclusion??null)}]:[];});}
 export function matchesSourceProof(chat,proof){const byId=new Map(chat.map(m=>[m.extra?.[KEY]?.id,m]));return proof.every(s=>{const m=byId.get(s.id);return m&&!!m.is_system===s.hidden&&sameSavedValue(m.extra?.[KEY]?.exclusion??null,s.exclusion);});}
 export function sourceOutcome(note,chat,restoring=false){const e=note.archive.entries.find(e=>e.id===note.entryId),check=inspectSources(chat,e.sources);return !check.issues.length&&matchesSourceProof(chat,expectedSourceState(note,restoring));}
+export function exclusionAfterDeletion(exclusion,entryId){
+ if(!exclusion?.owners?.includes(entryId))return exclusion??null;
+ const owners=exclusion.owners.filter(id=>id!==entryId);
+ return owners.length?{...exclusion,owners}:null;
+}
+export function deletionChatStamp(chat,entryId){
+ const messages=chat.map(message=>{
+  const data=message.extra?.[KEY];
+  if(!data?.exclusion?.owners?.includes(entryId))return message;
+  const clean={...data},exclusion=exclusionAfterDeletion(data.exclusion,entryId);
+  if(exclusion)clean.exclusion=exclusion;else delete clean.exclusion;
+  return {...message,extra:{...message.extra,[KEY]:clean}};
+ });
+ return fingerprint({name:'delete-chapter',mes:JSON.stringify(ordered(messages))});
+}
 /** Hashes chat content; receipts retain only this hash and ownership flags, never chat text. */
 export function chatStamp(chat,note){const e=note.archive.entries.find(e=>e.id===note.entryId),sources=new Map(e.sources.map(s=>[s.id,s])),states=new Map(note.sourceState.map(s=>[s.id,s]));const normalized=chat.map((message,index)=>{const m=clone(message),id=m.extra?.[KEY]?.id,source=sources.get(id)??(!id?e.sources.find(s=>s.index===index):null);if(source){const state=states.get(source.id),p=m.extra?.[KEY];if(p){if(p.id===source.id)delete p.id;if(p.exclusion?.owners?.includes(e.id)){p.exclusion.owners=p.exclusion.owners.filter(id=>id!==e.id);if(!p.exclusion.owners.length)delete p.exclusion;}if(!Object.keys(p).length)delete m.extra[KEY];}m.is_system=state?.exclusion?state.exclusion.owners.some(id=>id!==e.id)||state.exclusion.previousHidden:!!state?.hidden;}if(m.extra&&!Object.keys(m.extra).length)delete m.extra;return m;});return fingerprint({name:'chat',mes:JSON.stringify(ordered(normalized))});}
