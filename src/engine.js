@@ -1,7 +1,7 @@
 import {trace,tagError,errorMeta} from './diagnostics.js';
 import {normalisePromptPresets,mergePromptGroups} from './prompt-presets.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
-import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, chapterRangeKey, chapterSourceKey, fingerprint, matchesSourceFingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives, resolveImportedChapterNumbers} from './core.js';
+import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceRecord, chapterRangeKey, chapterSourceKey, fingerprint, matchesSourceFingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives, resolveImportedChapterNumbers} from './core.js';
 import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,entryNumber,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
@@ -9,7 +9,8 @@ import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
 import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp,sameSavedValue,archiveBody,captureSourceState,sourceProof,matchesSourceProof,sourceOutcome,chatStamp,deletionChatStamp,exclusionAfterDeletion} from './save-recovery.js';
 import {createCompression,editCompression} from './compression.js';
-import {appendContinuation,chapterSegments,continuationRequest,inputBudget} from './generation.js';
+import {appendContinuation,continuationRequest,distinctParagraphs,inputBudget,planSegments,SEGMENT_PROMPT,SYNTHESIS_PROMPT} from './generation.js';
+import {parseCoverage,planCoverage} from './coverage.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();this.nativeWrites=host.saveWrites??=new Map();host.setEngine?.(this);}
@@ -60,21 +61,20 @@ export class Engine {
     async generateDraft(draft,{continuing=false,retry=false,previousText=draft.text}={}) {
         const s=draft.session;this.assert(s);
         const configuration=this.host.configuration?.();
-        let source,sourceCount;
+        let blocks,offset=1;
         if(draft.type==='summary') {
             if(draft.replaceId){
                 const entry=this.chapterTarget(s,draft.replaceId,draft.replaceVersion);
                 draft.range=this.originalChapterRange(s,entry);
             }else this.checkRange(s,draft.range);
-            source=sourceText(draft.range);
-            sourceCount=draft.range.length;
+            blocks=draft.range.map(({name,text})=>`${name}:\n${text}`);
+            offset=s.chat.indexOf(draft.range[0].ref)+1;
         }
         else {
             const entries=this.archive(s).entries;
             const chosen=childrenIds(draft).map(id=>entries.find(e=>e.id===id));
             if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Выберите их заново.');
-            source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
-            sourceCount=chosen.length;
+            blocks=chosen.map(e=>`${e.title}\n${e.text}`);
         }
         this.setOperation({stage:'tokens',type:draft.type,title:draft.title,owner:s.key,scope:this.recovery.key(s.key)});
         const preset=this.prompt(draft.type),limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits());
@@ -87,57 +87,140 @@ export class Engine {
             return Math.ceil(value);
         };
         const state=continuing?{...draft.generationBatch}:{
-            index:0,resume:false,preset:preset.text,
-            chunks:draft.type==='summary'?await chapterSegments(preset.text,draft.range,source,limits,count):[{prompt:preset.text,source,tokens:await count(preset.text,source)}],
+            index:0,resume:false,preset:preset.text,phase:'draft',reductions:0,
+            chunks:await planSegments(preset.text,blocks,limits,count,preset.text+'\n\n'+SEGMENT_PROMPT),
         };
         if(continuing&&state.preset!==preset.text)throw Error('Промпт изменился. Запустите генерацию заново, чтобы применить его.');
-        let text=continuing?previousText:'',finish='unknown',interrupted=false,reasoningAmbiguous=continuing&&draft.reasoningAmbiguous;
-        const generationId=continuing?draft.generationId:this.host.uuid?.();
+        const generationId=continuing?draft.generationId:this.host.uuid?.(),sourceCount=blocks.length;
+        const meta={id:generationId,kind:continuing?'continue':draft.replaceId||retry?'regenerate':'create',level:draft.type,
+            target:draft.replaceId,number:draft.chapterNumber,sourceCount,rangeStart:offset,rangeEnd:offset+sourceCount-1};
+        const context={session:s,configuration,limits,count,meta};
+        let text=continuing&&!state.showFallback?previousText:'',finish='unknown',interrupted=false,reasoningAmbiguous=continuing&&draft.reasoningAmbiguous;
+        if(continuing&&state.showFallback)state.fallback=previousText;
+        state.showFallback=false;
+        let synthesisFailed=false;
+        for(;;){
+            const result=await this.generateSegments(state,text,context,continuing);
+            ({text,finish,interrupted}=result);
+            reasoningAmbiguous=reasoningAmbiguous||result.reasoningAmbiguous;
+            if(state.index<state.chunks.length||state.phase==='synthesis'||state.phase==='draft'&&state.chunks.length===1)break;
+            if(state.phase==='draft')state.fallback=distinctParagraphs(text).join('\n\n');
+            let next=false;
+            try{next=await this.prepareSynthesis(state,text,context);}
+            catch(error){
+                this.checkGeneration(s,configuration);
+                this.host.report?.(error,{severity:'warning',notify:false});
+            }
+            if(!next){text=state.fallback;synthesisFailed=true;break;}
+            text='';
+        }
+        const truncated=state.index<state.chunks.length;
+        if(truncated&&!text&&state.fallback){text=state.fallback;state.showFallback=true;}
+        const coverage=truncated?{status:'skipped-incomplete',missing:[]}:
+            await this.checkCoverage({summary:text,requirements:preset.text,blocks,offset},context);
+        this.host.diagnostics?.markCoverage?.(generationId,coverage.status);
+        Object.assign(draft,{text,finish,truncated,interrupted,reasoningAmbiguous,synthesisFailed,coverage,preset:preset.name,
+            compressionSource:blocks.join('\n\n'),generationId,generationBatch:state});
+        return draft;
+    }
+    async generateSegments(state,text,{session,configuration,limits,count,meta},recount){
+        let finish='unknown',interrupted=false,reasoningAmbiguous=false;
         while(state.index<state.chunks.length){
             const chunk=state.chunks[state.index];
-            const request=state.resume?await continuationRequest(chunk,text,limits.context,count):{...chunk,tokens:continuing?await count(chunk.prompt,chunk.source):chunk.tokens};
+            const request=state.resume?await continuationRequest(chunk,text,limits.context,count):
+                {...chunk,tokens:recount?await count(chunk.prompt,chunk.source):chunk.tokens};
             if(!request)throw Error('Не хватает места в контексте для продолжения этого фрагмента. Увеличьте контекст или запустите генерацию заново.');
-            const meta={id:generationId,kind:continuing?'continue':draft.replaceId||retry?'regenerate':'create',level:draft.type,
-                target:draft.replaceId,number:draft.chapterNumber,sourceCount,segment:state.index+1,segments:state.chunks.length};
+            const original=state.phase==='draft';
             let result;
             try{
-                result=await this.requestGeneration(s,configuration,request,limits,meta);
+                result=await this.requestGeneration(session,configuration,{...request,outputLimit:chunk.outputLimit},limits,
+                    {...meta,phase:state.phase,inputFirst:original?meta.rangeStart+chunk.first:null,inputLast:original?meta.rangeStart+chunk.last:null,
+                        segment:state.index+1,segments:state.chunks.length});
             }catch(error){
-                this.checkGeneration(s,configuration);
+                this.checkGeneration(session,configuration);
                 const failure=errorMeta(error);
-                if(!text.trim()||failure.code==='GEN-006'||failure.stage!=='api'&&failure.stage!=='response')throw error;
+                if(!(text.trim()||state.fallback)||failure.code==='GEN-006'||failure.stage!=='api'&&failure.stage!=='response')throw error;
                 finish=error.name==='TimeoutError'||failure.code==='GEN-003'?'timeout':'error';
                 interrupted=true;break;
             }
-            text=state.resume?appendContinuation(text,result.text):text?text+'\n\n'+result.text:result.text;
+            const appended=state.resume?distinctParagraphs(appendContinuation(text,result.text)).join('\n\n'):
+                text?text+'\n\n'+result.text:result.text;
+            if(state.resume&&appended===distinctParagraphs(text).join('\n\n')){
+                finish='no-progress';interrupted=true;break;
+            }
+            text=appended;
             reasoningAmbiguous=reasoningAmbiguous||result.ambiguous;
             finish=result.finish;
             if(result.truncated||result.interrupted){state.resume=true;interrupted=result.interrupted;break;}
             state.resume=false;state.index++;
         }
-        Object.assign(draft,{text,finish,truncated:state.index<state.chunks.length,interrupted,reasoningAmbiguous,preset:preset.name,
-            compressionSource:source,generationId,generationBatch:state});
-        return draft;
+        return {text,finish,interrupted,reasoningAmbiguous};
+    }
+    async prepareSynthesis(state,text,{limits,count}){
+        const blocks=distinctParagraphs(text),source=blocks.join('\n\n'),prompt=state.preset+'\n\n'+SYNTHESIS_PROMPT;
+        const tokens=await count(prompt,source);
+        const reserve=Math.min(limits.output,Math.max(64,Math.floor(limits.context/4)));
+        if(inputBudget(limits.context,tokens)>=reserve){
+            Object.assign(state,{phase:'synthesis',index:0,resume:false,chunks:[{prompt,source,tokens}]});
+            return true;
+        }
+        if(state.reductions>=3||state.reductionInput!=null&&tokens>=state.reductionInput)return false;
+        const outputLimit=Math.min(limits.output,Math.max(64,Math.floor(limits.context/8)));
+        const chunks=await planSegments(prompt,blocks,{...limits,output:outputLimit},count);
+        if(chunks.some(chunk=>inputBudget(limits.context,chunk.tokens)<Math.min(24,outputLimit)))return false;
+        Object.assign(state,{phase:'reduce',index:0,resume:false,reductions:state.reductions+1,reductionInput:tokens,
+            chunks:chunks.map(chunk=>({...chunk,outputLimit}))});
+        return true;
+    }
+    async checkCoverage(input,{session,configuration,limits,count,meta}){
+        const result={status:'unavailable',missing:[]};
+        if(!this.host.reviewCoverage)return result;
+        let checked=0,all=0;
+        const missing=new Map();
+        try{
+            this.setOperation({stage:'coverage',segment:0,segments:0});
+            const plan=await planCoverage({...input,limits,count}),windows=plan.windows;
+            all=plan.all;
+            for(const [i,request] of windows.entries()){
+                if(inputBudget(limits.context,request.tokens)<24)continue;
+                const inputFirst=input.offset+request.first,inputLast=input.offset+request.last;
+                const review=await this.requestGeneration(session,configuration,request,limits,
+                    {...meta,phase:'coverage',inputFirst,inputLast,segment:i+1,segments:all});
+                const findings=!review.truncated&&!review.interrupted&&!review.ambiguous&&parseCoverage(review.text,inputFirst,inputLast);
+                if(!findings)continue;
+                checked++;
+                for(const item of findings)missing.set(`${item.position}/${item.kind}`,item);
+            }
+        }catch(error){
+            this.checkGeneration(session,configuration);
+            if(errorMeta(error).code==='GEN-006')throw error;
+            this.host.report?.(error,{severity:'warning',notify:false});
+        }
+        if(missing.size)return {status:'possible-omission',missing:[...missing.values()].sort((a,b)=>a.position-b.position).slice(0,12)};
+        if(checked&&checked===all)return {status:'no-omissions-found',missing:[]};
+        return result;
     }
     checkGeneration(session,configuration){
         this.assert(session);
         if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
         if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
     }
-    async requestGeneration(session,configuration,{prompt,source,tokens},limits,meta){
-        const responseLength=Math.min(Math.floor(limits.output),inputBudget(limits.context,tokens));
+    async requestGeneration(session,configuration,{prompt,source,tokens,outputLimit},limits,meta){
+        const responseLength=Math.min(Math.floor(limits.output),outputLimit??Infinity,inputBudget(limits.context,tokens));
         if(responseLength<1)throw tagError(Error('В контексте не осталось места для ответа. Уменьшите диапазон или число записей.'),{code:'MEM-005',stage:'tokens',reason:'context-local'});
         this.checkGeneration(session,configuration);
         const unlock=this.host.lock?.();
         let request={},metrics={...meta,context:limits.context,configuredOutput:limits.output,input:tokens,requestedOutput:responseLength};
         try {
-            this.setOperation({stage:'api',segment:meta.segment,segments:meta.segments});
+            this.setOperation({stage:meta.phase==='coverage'?'coverage':'api',phase:meta.phase,segment:meta.segment,segments:meta.segments});
             const generated=await trace({code:'GEN-001',stage:'api',operation:'generate-'+meta.level,snapshot:{macroUsed:false,generation:'running'}},
-                ()=>this.host.generate(prompt,source,{responseLength,onRequest:parameters=>request=parameters}));
+                ()=>this.host[meta.phase==='coverage'?'reviewCoverage':'generate'](prompt,source,{responseLength,phase:meta.phase,onRequest:parameters=>request=parameters}));
             this.checkGeneration(session,configuration);
             const raw=typeof generated==='string'?generated:generated?.text;
             const finish=generated?.finish??(generated?.truncated?'length':'unknown');
-            metrics={...metrics,finish,received:generated?.received,reportedInput:generated?.reportedInput,stream:generated?.stream??request.stream};
+            const incomplete=generated?.truncated===true||generated?.interrupted===true;
+            metrics={...metrics,finish,technical:incomplete?true:finish==='unknown'?null:false,
+                received:generated?.received,reportedInput:generated?.reportedInput,stream:generated?.stream??request.stream};
             if(typeof raw!=='string')throw tagError(Error('Модель вернула некорректный формат ответа.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
             const cleaned=await this.host.cleanReasoning?.(raw)??{text:raw,ambiguous:false};
             this.checkGeneration(session,configuration);
@@ -145,6 +228,7 @@ export class Engine {
             return {...cleaned,finish,truncated:generated?.truncated===true,interrupted:generated?.interrupted===true};
         }catch(error){
             metrics.finish??=request.finish??(this.cancelled||error.name==='AbortError'?'canceled':error.name==='TimeoutError'?'timeout':'error');
+            metrics.technical=metrics.finish!=='canceled';
             throw error;
         }finally{
             this.host.diagnostics?.recordGeneration?.({...request,...metrics});
@@ -921,7 +1005,10 @@ Engine.prototype.saveDraft=async function(draft,...args){
     const code={episode:'DATA-001',summary:'DATA-002',arc:'DATA-003',volume:'DATA-004'}[draft?.type]??'DATA-010';
     try{
         const entry=await trace({code,stage:'save',operation:'save-'+draft?.type},()=>saveDraft.call(this,draft,...args));
-        if(draft?.generationId)this.host.diagnostics?.markGeneration?.(draft.generationId,'saved',entry.id);
+        if(draft?.generationId){
+            this.host.diagnostics?.markGeneration?.(draft.generationId,'saved',entry.id);
+            if(draft.coverage&&entry.text.replace(/\r\n?/g,'\n')!==draft.text.replace(/\r\n?/g,'\n'))this.host.diagnostics?.markCoverage?.(draft.generationId,'edited');
+        }
         return entry;
     }catch(error){
         if(draft?.generationId)this.host.diagnostics?.markGeneration?.(draft.generationId,draft.commitId&&this.operation.state==='waiting'?'waiting':'error',draft.commitId);

@@ -69,7 +69,11 @@ test('a range too large for the requested output reserve is processed in ordered
     e.prompt=()=>({name:'test',text:'Summarize incidents'});
     c.chat.forEach((m,i)=>m.mes=`Message-${i} `+'story '.repeat(85));
     host.limits=()=>({context:1200,output:700});
-    host.generate=async (_prompt,source,{responseLength})=>{
+    host.generate=async (_prompt,source,{responseLength,phase})=>{
+        if(phase==='synthesis'){
+            assert.match(source,/Часть текста [0-6][\s\S]+Часть текста 7/);
+            return 'Часть текста 1\n\nЧасть текста 7';
+        }
         seen.push(...Array.from(source.matchAll(/Message-(\d+)/g),match=>Number(match[1])));
         assert.equal(responseLength,700);
         return `Часть текста ${seen.at(-1)}`;

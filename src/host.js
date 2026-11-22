@@ -140,6 +140,7 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
                 if(settingsEvent)c.eventSource.removeListener(settingsEvent,observe);
             }
         },
+        reviewCoverage(prompt,source,options){return host.generate(prompt,source,options);},
         save:()=>trace({stage:'save'},()=>context().saveMetadata()),
         async saveSettings(expected) {
             if(typeof core.saveSettings!=='function')throw Error('SillyTavern не поддерживает проверяемое сохранение настроек.');

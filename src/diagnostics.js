@@ -2,6 +2,7 @@ import {VERSION} from './version.js';
 import {fingerprint} from './core.js';
 import {ERRORS,STAGES,OPERATIONS,REASONS,STATIC_MESSAGES} from './diagnostic-catalog.js';
 import {FINISH_REASONS} from './generation.js';
+import {COVERAGE_STATES} from './coverage.js';
 const knownMessages=new Map(Object.entries(STATIC_MESSAGES).map(([id,text])=>[text,id]));
 const tags=new WeakMap(),classes=new Set(['Error','TypeError','SyntaxError','RangeError','ReferenceError','TimeoutError','AbortError','AggregateError']);
 const files=new Set(['index.js','engine.js','host.js','core.js','ui.js','memory-echo.js','prompt-envelope.js','placement.js','source-links.js','order.js','hierarchy.js','backup.js','prompt-presets.js','builtin-prompts.js','generation.js','generation-view.js','diagnostics.js','diagnostic-catalog.js','diagnostics-view.js','version.js','compression.js','script.js','openai.js','macros.js','macro-system.js','eventemitter.js']);
@@ -13,14 +14,18 @@ const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=1e7?value:null;
 const generationKinds={create:'создание',regenerate:'перегенерация',continue:'продолжение'};
 const saveResults={draft:'черновик',saved:'подтверждено',waiting:'ожидает проверки',error:'ошибка',canceled:'отменено'};
 const generationLevels={summary:'Глава',arc:'Часть',volume:'Том'};
+const generationPhases={draft:'сводка источников',reduce:'сжатие промежуточных сводок',synthesis:'объединение',coverage:'проверка охвата'};
 const privateReference=value=>typeof value!=='string'||!value?null:/^(?:ref-[a-f0-9]{16}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(value)
     ?value:'ref-'+fingerprint({name:'generation-reference',mes:value.slice(0,200)}).slice(0,16);
 function validGeneration(value){
     if(!value||!Object.hasOwn(generationKinds,value.kind)||!Object.hasOwn(generationLevels,value.level))return null;
     const id=privateReference(value.id),time=value.time;
     if(!id||!Number.isSafeInteger(time)||time<0||time>8640000000000000)return null;
-    const numbers=Object.fromEntries(['number','sourceCount','segment','segments','context','configuredOutput','input','reportedInput','requestedOutput','actualOutput','received','stopCount'].map(key=>[key,count(value[key])]));
+    const numbers=Object.fromEntries(['number','sourceCount','rangeStart','rangeEnd','inputFirst','inputLast','segment','segments','context','configuredOutput','input','reportedInput','requestedOutput','actualOutput','received','stopCount'].map(key=>[key,count(value[key])]));
     return {id,time,kind:value.kind,level:value.level,target:privateReference(value.target),...numbers,
+        phase:Object.hasOwn(generationPhases,value.phase)?value.phase:'draft',
+        coverage:Object.hasOwn(COVERAGE_STATES,value.coverage)?value.coverage:'not-run',
+        technical:typeof value.technical==='boolean'?value.technical:null,
         finish:FINISH_REASONS.has(value.finish)?value.finish:'unknown',
         stream:['non-streaming','unexpected-stream'].includes(value.stream)?value.stream:'unknown',
         save:Object.hasOwn(saveResults,value.save)?value.save:'draft'};
@@ -33,9 +38,11 @@ function generationReport(entries){
             `${new Date(e.time).toISOString()} · ${generationKinds[e.kind]} · ${generationLevels[e.level]} №${number(e.number)}`,
             `ID операции: ${e.id} · ID записи: ${number(e.target)}`,
             `Источников: ${number(e.sourceCount)} · Фрагмент: ${number(e.segment)}/${number(e.segments)}`,
+            `${e.level==='summary'?'Диапазон сообщений':'Диапазон записей'} ${number(e.rangeStart)}–${number(e.rangeEnd)} · В запросе ${number(e.inputFirst)}–${number(e.inputLast)} · Этап: ${generationPhases[e.phase]}`,
             `Токены: вход ≈${number(e.input)} · вход по API ${number(e.reportedInput)} · контекст ${number(e.context)}`,
             `Выход: настройка ${number(e.configuredOutput)} · запрошено ${number(e.requestedOutput)} · параметры SillyTavern ${number(e.actualOutput)} · получено по API ${number(e.received)}`,
             `Завершение: ${e.finish} · Режим потока: ${e.stream} · Стоп-последовательностей: ${number(e.stopCount)} · Сохранение: ${saveResults[e.save]}`,
+            `Технический обрыв: ${e.technical===null?'не определено':e.technical?'да':'нет'} · Охват: ${COVERAGE_STATES[e.coverage]}`,
         ].join('\n');
     }).filter(Boolean).join('\n\n');
 }
@@ -132,6 +139,14 @@ export class Diagnostics {
             for(const entry of this.generations)if(ref?entry.id===ref:entry.target===targetRef&&entry.save==='waiting'){
                 entry.save=save;entry.target=targetRef??entry.target;changed=true;
             }
+            if(changed){this.persist();this.emit(null,false);}
+        }catch{}
+    }
+    markCoverage(id,status){
+        if(!id||!Object.hasOwn(COVERAGE_STATES,status))return;
+        try{
+            this.load(true);const ref=privateReference(id);let changed=false;
+            for(const entry of this.generations)if(entry.id===ref){entry.coverage=status;changed=true;}
             if(changed){this.persist();this.emit(null,false);}
         }catch{}
     }

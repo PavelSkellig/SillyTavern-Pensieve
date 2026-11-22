@@ -10,6 +10,7 @@ import {bounded} from './save-recovery.js';
 import {GenerationView,operationLabel} from './generation-view.js';
 import {validateCompression,compressionValues} from './compression.js';
 import {messageLabels} from './source-links.js';
+import {OMISSION_KINDS} from './coverage.js';
 
 export {UI_VERSION};
 
@@ -744,7 +745,7 @@ export class UI {
         const group=(title,target=this.content)=>{const section=el('fieldset',{class:'pv-setting-group'});section.append(el('legend',{},title));target.append(section);return section;};
         const basic=group('Основные настройки'),memory=el('div',{class:'pv-basic-options'}),messages=el('div',{class:'pv-basic-options'}),appearance=el('div',{class:'pv-basic-options'});messages.append(el('h4',{},'Создание глав'));appearance.append(el('h4',{},'Интерфейс'));basic.append(memory,messages,appearance);const placement=group('Подстановка памяти'),maintenance=el('details',{class:'pv-maintenance'});maintenance.append(el('summary',{},'Обслуживание'));this.content.append(maintenance);const archiveGroup=group('Резервные копии',maintenance);
         this.memoryPlacementView(placement,settings);
-        const preview=el('input',{type:'checkbox',checked:settings.previewEpisodes,'aria-label':'Предпросмотр глав'});preview.onchange=()=>{settings.previewEpisodes=preview.checked;this.saveSettings();};const previewLabel=el('label');previewLabel.append(preview,document.createTextNode('Предпросмотр глав'));messages.append(previewLabel,el('p',{class:'pv-muted'},'Показывать готовую главу перед сохранением. Если выключено, успешный результат ручной генерации сохраняется сразу.'));
+        const preview=el('input',{type:'checkbox',checked:settings.previewEpisodes,'aria-label':'Предпросмотр глав'});preview.onchange=()=>{settings.previewEpisodes=preview.checked;this.saveSettings();};const previewLabel=el('label');previewLabel.append(preview,document.createTextNode('Предпросмотр глав'));messages.append(previewLabel,el('p',{class:'pv-muted'},'Если выключено, новая глава сохраняется автоматически после генерации и проверки охвата. При предупреждении откроется черновик.'));
         for(const [key,title]of [['enabled','Включить расширение'],['inject','Внедрять активную память'],['exclude','Исключать обработанные сообщения после сохранения'],['collapse','Визуально сворачивать обработанные сообщения'],['showMessageLabels','Метки глав, частей и томов под сообщениями'],['pastNoteEnabled','Не акцентировать прошлые события без необходимости']]){
             const check=el('input',{type:'checkbox',checked:settings[key]});check.onchange=()=>{settings[key]=check.checked;this.saveSettings();this.refresh();};const l=el('label');l.append(check,document.createTextNode(title));(['enabled','inject'].includes(key)?memory:['exclude','collapse','showMessageLabels'].includes(key)?messages:appearance).append(l);
         }
@@ -872,15 +873,25 @@ export class UI {
         if(draft.ambiguousChapterSlot)body.append(el('p',{class:'pv-warning'},`Порядок относительно других глав неоднозначен. Сохранение подтвердит прежний номер ${draft.restoreNumber}.`));
         const title=el('input',{value:draft.title,'aria-label':'Название воспоминания'}),text=el('textarea',{'aria-label':'Текст воспоминания'},draft.text);
         body.append(field('Название',title),field('Текст — можно отредактировать перед сохранением',text));
-        const warning=el('p',{class:'pv-warning',role:'status'});
-        const notice=el('p',{role:'status'});body.prepend(warning);body.append(notice);let saving=false,generating=false,finished=false;
+        const warning=el('p',{class:'pv-warning',role:'status'}),coverage=el('p',{role:'status'});
+        const notice=el('p',{role:'status'});body.prepend(warning,coverage);body.append(notice);let saving=false,generating=false,finished=false;
         const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;const previewJob=owned();if(previewJob)previewJob.previewStatus=notice;
         const finish=()=>{if(finished)return;finished=true;dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};
         const minimize=button('−',()=>{const job=owned();if(job)this.generationView.minimize(job);});minimize.className='pv-icon';minimize.setAttribute('aria-label','Свернуть окно воспоминания');dialog.querySelector('.pv-header button').before(minimize);
         const update=()=>{
-            const reason={length:'Модель достигла выходного лимита.',timeout:'Сервер не ответил вовремя.',error:'Запрос не завершился.',interrupted:'Модель или подключение прервали ответ.','stop-sequence':'Модель остановилась на стоп-последовательности.'}[draft.finish];
-            warning.textContent=[draft.truncated?(reason??'Ответ неполный.')+' Полученный текст сохранён в черновике. Можно продолжить или начать заново.':'',draft.reasoningAmbiguous?'Проверьте разметку рассуждений в ответе.':''].filter(Boolean).join(' ');
+            const reason={length:'Модель достигла выходного лимита.',timeout:'Сервер не ответил вовремя.',error:'Запрос не завершился.',interrupted:'Модель или подключение прервали ответ.','stop-sequence':'Модель остановилась на стоп-последовательности.','no-progress':'Продолжение повторило уже полученный текст.'}[draft.finish];
+            warning.textContent=[draft.truncated?['Генерация завершилась не полностью. Проверьте результат перед сохранением.',reason,'Полученный текст доступен в черновике.'].filter(Boolean).join(' '):'',
+                draft.synthesisFailed?'Автоматическое объединение не завершилось. Черновик содержит промежуточные сводки в порядке событий.':'',
+                draft.reasoningAmbiguous?'Проверьте разметку рассуждений в ответе.':''].filter(Boolean).join(' ');
             warning.hidden=!warning.textContent;
+            const findings=draft.coverage?.missing??[],status=draft.coverage?.status,edited=editorDisplay(draft.text)!==text.value;
+            const positions=findings.slice(0,4).map(item=>`№${item.position} (${OMISSION_KINDS[item.kind]})`).join(', ');
+            const coverageText=status==='possible-omission'?`Сводка могла пропустить часть исходных событий. Рекомендуется проверить её полноту. ${draft.type==='summary'?'Сообщения':'Исходные записи'} ${positions}.`:
+                status==='unavailable'?'Автоматическая проверка охвата не завершилась. Сверьте сводку с исходными событиями.':
+                status==='no-omissions-found'?'Автоматическая проверка не обнаружила значимых пропусков.':'';
+            coverage.className=['possible-omission','unavailable'].includes(status)?'pv-warning':'pv-muted';
+            coverage.textContent=coverageText+(coverageText&&edited?' Проверка относилась к версии до правок.':'');
+            coverage.hidden=!coverage.textContent;
             save.textContent=draft.commitId?'Повторить проверку сохранения':draft.truncated?(replacement?'Заменить неполной сводкой':'Сохранить неполный текст'):replacement?'Заменить сводку':draft.restoreNumber!=null?`Сохранить главу №${draft.restoreNumber}`:'Сохранить';
             save.disabled=saving||generating;regen.disabled=saving||generating||!!draft.commitId;
             more.hidden=!draft.truncated||!draft.generationBatch;more.disabled=regen.disabled;
@@ -906,7 +917,7 @@ export class UI {
         const regen=button('Повторить генерацию',()=>generate(false)),more=button('Продолжить генерацию',()=>generate(true));
         const actions=row(save,more,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(generating)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(generating)this.e.cancel();dialog.close();}));
         if(replacement||draft.restoreNumber!=null)actions.append(this.chapterBackupButton(draft.session));
-        body.append(actions);update();
+        body.append(actions);text.addEventListener('input',update);update();
         dialog.oncancel=event=>{if(saving){event.preventDefault();minimize.click();}else if(this.e.busy)this.e.cancel();};dialog.onclose=()=>{if(dialog.pensieveMinimizeClosures){dialog.pensieveMinimizeClosures--;return;}finish();};dialog.showModal();
         });
     }

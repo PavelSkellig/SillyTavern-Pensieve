@@ -13,6 +13,8 @@ export function operationLabel(op={}){
     if(op.stage==='tokens')return `Проверяю токены${title}${op.outcome==='saved'?' · Запись подтверждена':''}`;
     if(op.stage==='confirm')return `Проверяю сохранение${title}${op.attempt?` · Проверка ${op.attempt}/3`:''}`;
     if(op.stage==='write')return `Сохраняю ${target}${title}`;
+    if(op.stage==='coverage')return `Проверяю охват событий${op.segments>1?` · Фрагмент ${op.segment}/${op.segments}`:''}`;
+    if(op.stage==='api'&&['synthesis','reduce'].includes(op.phase))return `Объединяю сводки${op.segments>1?` · Фрагмент ${op.segment}/${op.segments}`:''}`;
     if(op.stage==='api')return `Создаю ${target}${title}${op.segments>1?` · Фрагмент ${op.segment}/${op.segments}`:''} · Другой запрос к модели должен подождать`;
     return 'Операция выполняется';
 }
@@ -104,7 +106,9 @@ export class GenerationView {
             job.noticeCovered=false;if(job.phase==='generate')job.draft=await job.fn();
             if(!this.current(job))return null;
             this.assert(job);const draft=job.draft;job.type=draft.type;
-            if(job.phase==='save'||draft.type==='summary'&&!draft.replaceId&&draft.restoreNumber==null&&!this.engine.settings().previewEpisodes&&!draft.truncated&&!draft.interrupted&&!draft.reasoningAmbiguous){
+            if(job.phase==='save'||draft.type==='summary'&&!draft.replaceId&&draft.restoreNumber==null&&!this.engine.settings().previewEpisodes
+                &&!draft.truncated&&!draft.interrupted&&!draft.reasoningAmbiguous&&!draft.synthesisFailed
+                &&!['possible-omission','unavailable'].includes(draft.coverage?.status)){
                 job.phase='save';job.status='saving';this.paint(job);
                 await this.save(job);
                 if(!this.current(job))return null;
