@@ -104,7 +104,7 @@ export class GenerationView {
             job.noticeCovered=false;if(job.phase==='generate')job.draft=await job.fn();
             if(!this.current(job))return null;
             this.assert(job);const draft=job.draft;job.type=draft.type;
-            if(job.phase==='save'||draft.type==='summary'&&!draft.replaceId&&!this.engine.settings().previewEpisodes&&!draft.truncated&&!draft.reasoningAmbiguous){
+            if(job.phase==='save'||draft.type==='summary'&&!draft.replaceId&&draft.restoreNumber==null&&!this.engine.settings().previewEpisodes&&!draft.truncated&&!draft.interrupted&&!draft.reasoningAmbiguous){
                 job.phase='save';job.status='saving';this.paint(job);
                 await this.save(job);
                 if(!this.current(job))return null;

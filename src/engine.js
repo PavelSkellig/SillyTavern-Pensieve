@@ -60,7 +60,13 @@ export class Engine {
         const s=draft.session;this.assert(s);
         const configuration=this.host.configuration?.();
         let source;
-        if(draft.type==='summary') {this.checkRange(s,draft.range);source=sourceText(draft.range);}
+        if(draft.type==='summary') {
+            if(draft.replaceId){
+                const entry=this.chapterTarget(s,draft.replaceId,draft.replaceVersion);
+                draft.range=this.originalChapterRange(s,entry);
+            }else this.checkRange(s,draft.range);
+            source=sourceText(draft.range);
+        }
         else {
             const entries=this.archive(s).entries;
             const chosen=childrenIds(draft).map(id=>entries.find(e=>e.id===id));
@@ -95,24 +101,57 @@ export class Engine {
         draft.reasoningAmbiguous=cleaned.ambiguous;
         draft.preset=preset.name;draft.compressionSource=source;return draft;
     }
-    chapterSlotsForRange(archive,range){
-        const rangeKey=chapterRangeKey(range);
-        const occupied=new Set(archive.entries.filter(entry=>entry.type==='summary').map(entry=>Number(entryNumber(entry,archive.entries))));
-        return rangeKey?(archive.chapterSlots??[]).filter(slot=>slot.rangeKey===rangeKey&&!occupied.has(slot.number)):[];
+    chapterTarget(session,id,version){
+        const entry=this.archive(session).entries.find(item=>item.id===id&&item.type==='summary');
+        if(!entry||version!=null&&entry.version!==version)throw Error('Глава изменилась или удалена. Откройте её заново.');
+        return entry;
     }
-    async generateSummary(start,end,{allowOverlap=false,replaceId=null,restoreNumber=null}={}) {
+    originalChapterRange(session,entry){
+        const sourceChat=entry.sourceChat??entry.origin?.chat;
+        if(hasDetachedSources(entry)||sourceChat&&sourceChat!==session.key)throw Error('Исходные сообщения этой главы относятся к другому чату. Сохранённая глава остаётся в архиве.');
+        const {matches,issues}=inspectSources(session.chat,entry.sources);
+        const first=matches[0]?.index;
+        if(issues.length||first===undefined||matches.some(({index},offset)=>index!==first+offset))
+            throw Error('Не удалось восстановить исходный диапазон главы: сообщения изменены, удалены или идут в другом порядке. Сохранённая глава остаётся в архиве.');
+        return captureRange(session.chat,first,matches.at(-1).index);
+    }
+    chapterSlotsForRange(archive,range,chat=this.session().chat){
+        const rangeKey=chapterRangeKey(range);
+        if(!rangeKey)return [];
+        const chapters=archive.entries.filter(entry=>entry.type==='summary');
+        const numbers=new Map(chapters.map(entry=>[entry.id,Number(entryNumber(entry,archive.entries))]));
+        const occupied=new Set(numbers.values());
+        const slots=(archive.chapterSlots??[]).filter(slot=>slot.rangeKey===rangeKey&&!occupied.has(slot.number));
+        if(!slots.length)return slots;
+        const {ranges}=narrativeOrder(chapters,archive.entries,chat),start=chat.indexOf(range[0].ref),end=chat.indexOf(range.at(-1).ref);
+        return slots.map(slot=>({...slot,ambiguous:slots.length>1||chapters.some(entry=>{
+            const position=ranges.get(entry.id),number=numbers.get(entry.id);
+            if(!position||position.historical||!Number.isSafeInteger(number))return true;
+            return position.end<start?number>=slot.number:position.start>end?number<=slot.number:true;
+        })}));
+    }
+    async regenerateChapter(id,{session=null,version=null}={}){
         return this.run(async()=>{
-            const s=this.session(),archive=this.archive(s);
-            if(archive.pending||await this.pendingReceipt(s))throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
+            const s=session??this.session();this.assert(s);
+            if(this.archive(s).pending||await this.pendingReceipt(s))throw Error('Сначала завершите незавершённую операцию в настройках.');
+            const entry=this.chapterTarget(s,id,version),chapterNumber=Number(entryNumber(entry,this.archive(s).entries));
+            return this.generateDraft({session:s,type:'summary',replaceId:id,replaceVersion:entry.version,chapterNumber,title:entry.title});
+        });
+    }
+    async generateSummary(start,end,{allowOverlap=false,replaceId=null,replaceVersion=null,restoreNumber=null}={}) {
+        return this.run(async()=>{
+            const s=this.session();
+            if(this.archive(s).pending||await this.pendingReceipt(s))throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
+            const archive=this.archive(s);
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(archive.entries,range);
-            const old=replaceId?archive.entries.find(entry=>entry.id===replaceId&&entry.type==='summary'):null;
+            const old=replaceId?this.chapterTarget(s,replaceId,replaceVersion):null;
             const rangeKey=chapterRangeKey(range);
             if(replaceId&&(!old||hasDetachedSources(old)||!rangeKey||chapterRangeKey(old.sources)!==rangeKey))throw Error('Исходный диапазон главы изменился. Сохранённая глава не будет заменена.');
             if(overlaps.length&&!allowOverlap&&!old)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
-            const slot=restoreNumber===null?null:this.chapterSlotsForRange(archive,range).find(item=>item.number===restoreNumber);
+            const slot=restoreNumber===null?null:this.chapterSlotsForRange(archive,range,s.chat).find(item=>item.number===restoreNumber);
             if(restoreNumber!==null&&!slot)throw Error('Прежний номер не соответствует этому диапазону или уже занят.');
             const number=old?Number(entryNumber(old,archive.entries)):slot?.number??Math.max(nextNumber('summary',archive.entries),...(archive.chapterSlots??[]).map(item=>item.number+1));
-            return this.generateDraft({session:s,type:'summary',range,replaceId,replaceVersion:old?.version,chapterNumber:number,restoreNumber,title:old?.title??`Глава №${number}`,order:start});
+            return this.generateDraft({session:s,type:'summary',range,replaceId,replaceVersion:old?.version,chapterNumber:number,restoreNumber,ambiguousChapterSlot:slot?.ambiguous===true,title:old?.title??`Глава №${number}`,order:start});
         });
     }
     generateArc(ids,options={}) {return this.generateCollection('arc',ids,options);}
@@ -158,7 +197,8 @@ export class Engine {
                 ||!this.deletionSourceProof(s.chat,note))throw this.receiptError('state-changed');
             return;
         }
-        if(this.saveGuard&&(this.saveGuard.archive!==s.metadata[KEY]||this.saveGuard.chat!==chatStamp(s.chat,note)))throw this.receiptError('state-changed');
+        if(this.saveGuard&&(this.saveGuard.archive!==s.metadata[KEY]||this.saveGuard.chat!==chatStamp(s.chat,note)
+            ||this.saveGuard.messages&&!sameSavedValue(this.saveGuard.messages,s.chat)))throw this.receiptError('state-changed');
         const wanted=note.archive.entries.find(e=>e.id===note.entryId),actual=archive.entries.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;
         if(!sameSavedValue(view(actual),view(wanted)))throw this.receiptError('state-changed');
     }
@@ -171,7 +211,7 @@ export class Engine {
                 if(note){note.write=descriptor;await this.keepReceipt(s,note);this.guardWrite(s,archive,note);}
                 if(task.timedOut)throw Object.assign(Error('Запись не запущена после истечения времени проверки.'),{name:'TimeoutError'});
                 task.started=true;return await this.recovery.writeExclusive(key,()=>{
-                    if(deleting){
+                    if(deleting||this.isChapterEditReceipt(note)){
                         if(task.timedOut)throw this.receiptError();
                         this.guardWrite(s,archive,note);
                     }
@@ -186,8 +226,8 @@ export class Engine {
     }
     writeProof(note,disk){
         if(!note.write||archiveStamp(disk.metadata?.[KEY])!==note.write.archive)return false;
-        const chat=note.intent==='delete'?deletionChatStamp(disk.messages,note.entryId):chatStamp(disk.messages,note);
-        return chat===note.write.chat&&matchesSourceProof(disk.messages,note.write.sources);
+        if(note.intent==='delete')return !this.hasChapterOwner(disk.messages,note.entryId);
+        return chatStamp(disk.messages,note)===note.write.chat&&matchesSourceProof(disk.messages,note.write.sources);
     }
     async settledReceipt(s,note,disk){
         const key=this.journalKey(s,note);if(this.nativeWrites.has(key))throw this.receiptError();
@@ -223,6 +263,10 @@ export class Engine {
     async keepReceipt(s,note){const key=this.journalKey(s,note);this.pinReceipt(note,key);await trace({stage:'save',reason:'storage'},()=>bounded(()=>this.recovery.put(s.key,note,key),this.policy().saveTimeout));this.assert(s);this.activeReceipt=note;if(!this.saveGuard)this.saveGuard={key,archive:s.metadata[KEY],chat:note.intent==='delete'?note.deleteChat:chatStamp(s.chat,note)};return note;}
     async clearReceipt(s,note){if(this.nativeWrites.has(this.journalKey(s,note)))throw this.receiptError();try{await bounded(()=>this.recovery.remove(s.key,note.operationId,this.journalKey(s,note)),this.policy().saveTimeout);}catch(error){if(errorMeta(error).reason==='pending')throw this.receiptError();this.host.report?.(error,{code:'UI-001',stage:'ui',operation:'ui',severity:'warning'});}this.assert(s);}
     makeReceipt(s,archive,operationId,base,previousActive=null){const snapshot=clone(archive);snapshot.owner=s.key;const entry=snapshot.entries.find(e=>e.id===snapshot.pending.entryId);return {version:1,owner:s.key,operationId,entryId:entry.id,entryVersion:entry.version,base,archive:snapshot,sourceState:captureSourceState(entry,s.chat,snapshot.pending.type==='commit'),previousActive:previousActive??snapshot.entries.filter(e=>e.id!==entry.id).map(e=>({id:e.id,version:e.version,active:e.active})),createdAt:new Date().toISOString()};}
+    isChapterEditReceipt(note){
+        return note?.intent==='chapter-edit'||note?.intent===undefined&&note?.archive.pending?.type==='commit'
+            &&note.entryVersion>1&&note.archive.entries.some(entry=>entry.id===note.entryId&&entry.type==='summary');
+    }
     checkReceiptOwner(archive,note){if(archive.pending&&(archive.pending.entryId!==note.entryId||archive.pending.type!==note.archive.pending.type||archive.pending.operationId&&archive.pending.operationId!==note.operationId))throw Error('Незавершённая операция отличается от этого результата. Откройте восстановление в настройках; повторный запрос не требуется.');}
     receiptMatches(note,archive,messages){
         const expected=note.archive.entries.find(e=>e.id===note.entryId),entry=archive?.entries?.find(e=>e.id===note.entryId),view=e=>note.intent==='restore'&&e?Object.fromEntries(Object.entries(e).filter(([key])=>!['active','restored','needsReview'].includes(key))):e;
@@ -276,7 +320,11 @@ export class Engine {
             if(draft.replaceId&&(!old||draft.replaceVersion!==undefined&&old.version!==draft.replaceVersion))throw Error('Заменяемая запись изменилась или удалена. Откройте её заново.');
             if(draft.type==='summary'&&!old&&draft.chapterNumber!==undefined){
                 if(archive.entries.some(entry=>entry.type==='summary'&&Number(entryNumber(entry,archive.entries))===draft.chapterNumber))throw Error('Номер главы уже занят. Создайте новый черновик.');
-                if(draft.restoreNumber!=null&&!this.chapterSlotsForRange(archive,draft.range).some(slot=>slot.number===draft.restoreNumber))throw Error('Прежний номер больше не доступен для этого диапазона.');
+                if(draft.restoreNumber!=null){
+                    const slot=this.chapterSlotsForRange(archive,draft.range,s.chat).find(item=>item.number===draft.restoreNumber);
+                    if(!slot)throw Error('Прежний номер больше не доступен для этого диапазона.');
+                    if(slot.ambiguous&&!draft.ambiguousChapterSlot)throw Error('Положение главы изменилось. Выберите диапазон и подтвердите номер заново.');
+                }
             }
             if(draft.type==='summary') {
                 this.checkRange(s,draft.range);
@@ -284,8 +332,7 @@ export class Engine {
                     source.ref.extra??={};source.ref.extra[KEY]??={};
                     source.ref.extra[KEY].id??=this.host.uuid();source.id=source.ref.extra[KEY].id;
                 }
-                // Replacement keeps the same provenance; extending an existing range is a separate version.
-                if(old&&(old.sources.length!==draft.range.length||old.sources.some((x,i)=>x.id!==draft.range[i].id)))throw Error('Для замены выберите ровно исходные сообщения этой главы. Для другого диапазона сохраните отдельную версию.');
+                if(old&&chapterRangeKey(old.sources)!==chapterRangeKey(draft.range))throw Error('Для замены нужны исходные сообщения именно этой главы.');
             } else {
                 if(childrenIds(draft).some((id,i)=>archive.entries.find(e=>e.id===id)?.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Повторите генерацию.');
             }
@@ -315,9 +362,13 @@ export class Engine {
                 if(!old)for(const e of archive.entries)if(replaced.has(e.id))e.active=false;
             }
             if(!old)archive.entries.push(entry);
-            draft.commitId=entry.id;draft.commitVersion=entry.version;this.setOperation({type:entry.type,title:entry.title,entryId:entry.id});
-            draft.operationId??=this.host.uuid();archive.pending={type:!old&&draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id,operationId:draft.operationId};
-            const receipt=await this.keepReceipt(s,this.makeReceipt(s,archive,draft.operationId,base,previousActive));
+            const chapterEdit=draft.type==='summary'&&(old||draft.restoreNumber!=null);
+            this.setOperation({type:entry.type,title:entry.title,entryId:entry.id});
+            draft.operationId??=this.host.uuid();archive.pending={type:!chapterEdit&&!old&&draft.type==='summary'&&this.settings().exclude?'hide':'commit',entryId:entry.id,operationId:draft.operationId};
+            const note=this.makeReceipt(s,archive,draft.operationId,base,previousActive);
+            if(chapterEdit){note.intent='chapter-edit';return (await this.persistChapterEdit(s,note,draft)).entry;}
+            draft.commitId=entry.id;draft.commitVersion=entry.version;
+            const receipt=await this.keepReceipt(s,note);
             await this.persist(s,archive,disk=>entry.type!=='summary'||inspectSources(disk.messages,entry.sources).issues.length===0);
             if(archive.pending)await this.completePending(s);
             await this.clearReceipt(s,receipt);return this.refreshAfterSave(s,this.archive(s).entries.find(e=>e.id===entry.id));
@@ -417,6 +468,13 @@ export class Engine {
     }
     async resumeReceipt(s,note,checked,restore=false){
         if(checked.status==='conflict'||checked.status==='unknown')throw checked.error??this.receiptError();
+        if(this.isChapterEditReceipt(note)){
+            if(checked.status==='saved')return this.finishReceipt(s,note,checked.disk);
+            await this.settledReceipt(s,note,checked.disk);
+            if(archiveStamp(checked.disk.metadata?.[KEY]??emptyArchive(s.key))!==note.base)throw this.receiptError('state-changed');
+            if(restore){await this.clearReceipt(s,note);this.setOperation({state:'canceled',outcome:null});return {status:'canceled'};}
+            return this.persistChapterEdit(s,note);
+        }
         await this.settledReceipt(s,note,checked.disk);this.guardLive(s,note,checked.disk);
         restore=restore||note.intent==='restore';if(!restore&&checked.status==='saved')return this.finishReceipt(s,note,checked.disk);
         const stored=checked.disk.metadata?.[KEY]??emptyArchive(s.key);
@@ -427,6 +485,37 @@ export class Engine {
         await this.keepReceipt(s,note);await this.persist(s,archive);
         const result=restore?await this.restoreInternal(s,entry):await this.completePending(s);
         await this.clearReceipt(s,note);const saved=this.archive(s).entries.find(e=>e.id===note.entryId);await this.refreshAfterSave(s,saved);return {status:'saved',entry:saved,issues:result.issues??[]};
+    }
+    async persistChapterEdit(s,note,draft=null){
+        this.assert(s);
+        const previous=this.archive(s),hadArchive=Object.hasOwn(s.metadata,KEY);
+        await this.keepReceipt(s,note);
+        const archive=clone(note.archive),target=archive.entries.find(entry=>entry.id===note.entryId);
+        let messages;
+        try{
+            const disk=await bounded(()=>this.host.read(),this.policy().readTimeout);
+            this.assert(s);
+            if(archiveStamp(previous)!==note.base||archiveStamp(this.archive(s))!==note.base
+                ||archiveStamp(disk.metadata?.[KEY]??emptyArchive(s.key))!==note.base)throw Error('Архив изменился. Откройте актуальную версию чата перед сохранением.');
+            this.originalChapterRange(s,target);
+            if(!sameSavedValue(disk.messages,s.chat)||!sourceOutcome(note,disk.messages))throw Error('Проверьте, что текущая переписка сохранена на сервере, и повторите сохранение главы.');
+            messages=disk.messages;
+        }catch(error){
+            if(draft)await this.clearReceipt(s,note);
+            throw error;
+        }
+        if(draft){draft.commitId=target.id;draft.commitVersion=target.version;}
+        this.saveGuard.messages=messages;
+        archive.pending=null;
+        this.setOperation({type:target.type,title:target.title,entryId:target.id});
+        try{
+            await this.persist(s,archive,stored=>sameSavedValue(stored.messages,messages)&&sourceOutcome(note,stored.messages));
+        }catch(error){
+            if(s.metadata[KEY]===archive){if(hadArchive)s.metadata[KEY]=previous;else delete s.metadata[KEY];}
+            throw error;
+        }
+        await this.clearReceipt(s,note);
+        return {status:'saved',entry:await this.refreshAfterSave(s,target)};
     }
     async recover(mode) {
         return this.run(async()=>{
@@ -495,19 +584,22 @@ export class Engine {
         return {version:1,owner:s.key,operationId,entryId:id,entryVersion:entry.version,base:archiveStamp(existing),archive,
             createdAt:new Date().toISOString(),intent:'delete',deleteChat:deletionChatStamp(s.chat,id),sourceState,previousActive:[]};
     }
-    async deleteChapter(id){
+    async deleteChapter(id,{session=null,version=null}={}){
         return this.run(async()=>{
-            const s=this.session(),note=await this.pendingReceipt(s);
+            const s=session??this.session(),note=await this.pendingReceipt(s);
             if(note?.intent==='delete'&&note.entryId===id)return this.resumeChapterDeletion(s,note,'complete');
             if(note||this.archive(s).pending)throw Error('Сначала завершите незавершённую операцию в настройках.');
             const plan=this.chapterDeletionPlan(s,id);
             if(!plan)return {status:'absent'};
+            if(version!=null&&plan.entryVersion!==version)throw Error('Глава изменилась. Откройте её и подтвердите удаление заново.');
             return this.resumeChapterDeletion(s,plan,'begin');
         });
     }
+    hasChapterOwner(chat,id){
+        return chat.some(message=>message.extra?.[KEY]?.exclusion?.owners?.includes(id));
+    }
     deletionSourceProof(chat,note){
-        return !chat.some(message=>message.extra?.[KEY]?.exclusion?.owners?.includes(note.entryId))
-            &&matchesSourceProof(chat,note.sourceState);
+        return !this.hasChapterOwner(chat,note.entryId)&&matchesSourceProof(chat,note.sourceState);
     }
     async resumeChapterDeletion(s,note,mode){
         this.assert(s);
@@ -515,7 +607,7 @@ export class Engine {
         candidate.pending=null;
         const confirmed={...candidate,revision:(candidate.revision||0)+1};
         const matches=disk=>sameSavedValue(disk.metadata?.[KEY],confirmed)
-            &&deletionChatStamp(disk.messages,note.entryId)===note.deleteChat&&this.deletionSourceProof(disk.messages,note);
+            &&!this.hasChapterOwner(disk.messages,note.entryId);
         this.setOperation({state:'recovering',stage:'confirm',owner:s.key,scope:this.recovery.key(s.key),title:'Удаление главы'});
         let disk;
         if(mode==='begin'){
@@ -531,9 +623,7 @@ export class Engine {
         this.assert(s);
         await this.settledReceipt(s,note,disk);
         const saved=matches(disk),old=this.archive(s),baseline=archiveStamp(disk.metadata?.[KEY]??emptyArchive(s.key))===note.base;
-        if(!baseline&&!saved||archiveStamp(old)!==note.base&&!sameSavedValue(old,confirmed)
-            ||deletionChatStamp(s.chat,note.entryId)!==note.deleteChat
-            ||deletionChatStamp(disk.messages,note.entryId)!==note.deleteChat)throw this.receiptError('state-changed');
+        if(!baseline&&!saved||archiveStamp(old)!==note.base&&!sameSavedValue(old,confirmed))throw this.receiptError('state-changed');
         if(!saved&&mode==='cancel'){
             await this.clearReceipt(s,note);
             return {status:'canceled'};
@@ -542,9 +632,11 @@ export class Engine {
             this.setOperation({state:'waiting',outcome:'unknown'});
             return {status:'waiting'};
         }
+        if(!saved&&(deletionChatStamp(s.chat,note.entryId)!==note.deleteChat
+            ||deletionChatStamp(disk.messages,note.entryId)!==note.deleteChat))throw this.receiptError('source-changed');
         if(!saved)await this.keepReceipt(s,note);
         this.assert(s);
-        if(this.archive(s)!==old||deletionChatStamp(s.chat,note.entryId)!==note.deleteChat)throw this.receiptError('state-changed');
+        if(this.archive(s)!==old||!saved&&deletionChatStamp(s.chat,note.entryId)!==note.deleteChat)throw this.receiptError('state-changed');
         const touched=[],knownSources=new Set(note.sourceState.map(source=>source.id));
         this.restoring=true;
         try{
@@ -557,9 +649,11 @@ export class Engine {
                 touched.push({message,data,clean});
                 message.extra[KEY]=clean;
             }
-            if(!this.deletionSourceProof(s.chat,note))throw this.receiptError('source-changed');
             if(saved)s.metadata[KEY]=confirmed;
-            else await this.persist(s,candidate,matches);
+            else {
+                if(!this.deletionSourceProof(s.chat,note))throw this.receiptError('source-changed');
+                await this.persist(s,candidate,disk=>matches(disk)&&deletionChatStamp(disk.messages,note.entryId)===note.deleteChat&&this.deletionSourceProof(disk.messages,note));
+            }
         }catch(error){
             if(s.metadata[KEY]===candidate)s.metadata[KEY]=old;
             for(const {message,data,clean} of touched)if(message.extra?.[KEY]===clean)message.extra[KEY]=data;
@@ -621,7 +715,7 @@ export class Engine {
                 await this.resumeReceipt(s,note,checked,checked.status==='missing'||note.intent==='restore');
                 if(await this.pendingReceipt(s))throw this.backupBlocked('unsettled');
                 this.activeReceipt=null;this.saveGuard=null;
-                if(checked.status==='missing')this.host.notify?.('info','Незавершённый результат сохранён в архив без активности. Продолжаю восстановление копии.');
+                if(checked.status==='missing')this.host.notify?.('info',this.isChapterEditReceipt(note)?'Неподтверждённое изменение главы отменено. Продолжаю восстановление копии.':'Незавершённый результат сохранён в архив без активности. Продолжаю восстановление копии.');
             }else if(pending){
                 const disk=await bounded(()=>trace({code:'DATA-005',stage:'read'},()=>this.host.read()),this.policy().readTimeout);this.assert(s);this.backupRecoveryStatus.checked=true;
                 if(this.nativeWrites.has(this.recovery.key(s.key)))throw this.backupBlocked('unsettled');
@@ -750,7 +844,7 @@ export class Engine {
     entries() {return this.orderEntries().entries;}
 }
 
-const operationMeta={generateSummary:{operation:'generate-summary',stage:'handler'},generateArc:{operation:'generate-arc',stage:'handler'},generateVolume:{operation:'generate-volume',stage:'handler'},memory:{code:'MEM-002',stage:'active',operation:'context'},prepareContext:{code:'MEM-009',stage:'handoff',operation:'context'},refreshMemory:{code:'MEM-007',stage:'injection',operation:'context'},restoreBackup:{code:'DATA-009',stage:'restore',operation:'backup-restore'},importArchive:{code:'DATA-007',stage:'import',operation:'backup-import'},recover:{code:'DATA-009',stage:'restore',operation:'backup-restore'},change:{code:'DATA-010',stage:'save',operation:'archive-edit'},deleteChapter:{code:'DATA-010',stage:'save',operation:'archive-edit'}};
+const operationMeta={generateSummary:{operation:'generate-summary',stage:'handler'},regenerateChapter:{operation:'generate-summary',stage:'handler'},generateArc:{operation:'generate-arc',stage:'handler'},generateVolume:{operation:'generate-volume',stage:'handler'},memory:{code:'MEM-002',stage:'active',operation:'context'},prepareContext:{code:'MEM-009',stage:'handoff',operation:'context'},refreshMemory:{code:'MEM-007',stage:'injection',operation:'context'},restoreBackup:{code:'DATA-009',stage:'restore',operation:'backup-restore'},importArchive:{code:'DATA-007',stage:'import',operation:'backup-import'},recover:{code:'DATA-009',stage:'restore',operation:'backup-restore'},change:{code:'DATA-010',stage:'save',operation:'archive-edit'},deleteChapter:{code:'DATA-010',stage:'save',operation:'archive-edit'}};
 for(const [name,meta]of Object.entries(operationMeta)){const method=Engine.prototype[name];Engine.prototype[name]=function(...args){return trace(meta,()=>method.apply(this,args));};}
 const saveDraft=Engine.prototype.saveDraft;
 Engine.prototype.saveDraft=function(draft,...args){const code={episode:'DATA-001',summary:'DATA-002',arc:'DATA-003',volume:'DATA-004'}[draft?.type]??'DATA-010';return trace({code,stage:'save',operation:'save-'+draft?.type},()=>saveDraft.call(this,draft,...args));};

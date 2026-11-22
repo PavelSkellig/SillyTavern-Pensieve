@@ -35,7 +35,8 @@ const valid=note=>{
  if(a.owner!==note.owner||!p||p.entryId!==note.entryId||p.operationId!==note.operationId||Object.keys(p).some(k=>!['type','entryId','operationId'].includes(k)))throw invalid();
  if(deletion){
   if(p.type!=='delete'||a.entries.some(entry=>entry.id===note.entryId)||!/^[a-f0-9]{32}$/.test(note.deleteChat)||!Array.isArray(note.sourceState)||!note.sourceState.every(state=>id(state?.id)&&!state.exclusion?.owners?.includes(note.entryId))||note.previousActive?.length!==0)throw invalid();
- }else if(!e||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(p.type)||note.intent!==undefined&&note.intent!=='restore'||note.deleteChat!==undefined)throw invalid();
+ }else if(!e||!['hide','commit',...(note.intent==='restore'?['restore']:[])].includes(p.type)||note.intent!==undefined&&!['restore','chapter-edit'].includes(note.intent)||note.deleteChat!==undefined)throw invalid();
+ if(note.intent==='chapter-edit'&&(p.type!=='commit'||e.type!=='summary'))throw invalid();
  const sources=deletion?note.sourceState.map(state=>state.id):e.sources.map(s=>s.id);
  if(!stateValid(note.sourceState,sources)||note.sourceState.length!==sources.length||!Array.isArray(note.previousActive)||new Set(note.previousActive.map(x=>x?.id)).size!==note.previousActive.length||!note.previousActive.every(x=>x&&id(x.id)&&typeof x.active==='boolean'&&Number.isSafeInteger(x.version)&&x.version>0&&a.entries.some(e=>e.id===x.id)))throw invalid();
  if(note.write&&(!id(note.write.id)||!['pending','settled'].includes(note.write.state)||!['save','hide','unhide'].includes(note.write.kind)||!(/^[a-f0-9]{32}$/.test(note.write.archive))||!(/^[a-f0-9]{32}$/.test(note.write.chat))||!stateValid(note.write.sources,sources)))throw invalid();

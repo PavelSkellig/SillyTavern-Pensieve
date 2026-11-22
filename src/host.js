@@ -111,7 +111,7 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
                 const truncated=interrupted||['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason);
                 if(['content_filter','safety','SAFETY','refusal'].includes(reason))throw tagError(Error('Модель остановила ответ фильтром. Исходники не изменены.'),{code:'GEN-008',stage:'response',reason:'refused'});
                 const text=trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));
-                if(truncated&&!text?.trim())throw tagError(Error('Ответ модели был обрезан до появления текста.'),{code:'GEN-007',stage:'response',reason:'truncated'});
+                if(truncated&&(typeof text!=='string'||!text.trim()))throw tagError(Error('Ответ модели был обрезан до появления текста.'),{code:'GEN-007',stage:'response',reason:'truncated'});
                 return {text,truncated,interrupted};
             } finally {cancelCurrent=null;c.eventSource.removeListener(c.eventTypes.GENERATION_STOPPED,nativeCancel);c.eventSource.removeListener(event,literal);}
         },

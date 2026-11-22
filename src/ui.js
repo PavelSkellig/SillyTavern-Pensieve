@@ -168,7 +168,7 @@ export class UI {
             const session=this.e.session();if(this.rangeChatKey!==session.key)throw Error('Выберите диапазон в текущем чате.');this.resolveRange();
             if(!Number.isInteger(this.start)||!Number.isInteger(this.end)||this.start>this.end){this.e.host.notify('warning','Отметьте начало и конец главы в правильном порядке.');return;}
             const archive=this.e.archive(session),range=captureRange(session.chat,this.start,this.end),overlaps=findOverlaps(archive.entries,range);
-            const slots=this.e.chapterSlotsForRange(archive,range);
+            const slots=this.e.chapterSlotsForRange(archive,range,session.chat);
             const options=overlaps.length||slots.length?await this.chooseChapterRange(range,archive,overlaps,slots):{};
             if(!options)return;this.e.assert(session);
             const end=this.end,node=[...document.querySelectorAll('#chat .mes[mesid]')].find(n=>Number(n.getAttribute('mesid'))===end);
@@ -183,12 +183,13 @@ export class UI {
             const decide=value=>{choice=value;dialog.close();};
             if(overlaps.length)body.append(el('p',{},'Выбранные сообщения уже входят в главы: '+overlaps.map(entry=>entryDisplayTitle(entry,archive.entries)).join(', ')+'.'));
             if(slots.length)body.append(el('p',{},'Этот диапазон совпадает с исходниками удалённой главы. Можно создать новую сводку под прежним номером.'));
+            if(slots.some(slot=>slot.ambiguous))body.append(el('p',{class:'pv-warning'},'По соседним главам не удалось однозначно подтвердить хронологический номер. Проверьте его перед сохранением.'));
             const actions=row();
             for(const {number} of slots)actions.append(button(`Воссоздать главу №${number}`,()=>decide({allowOverlap:!!overlaps.length,restoreNumber:number}),true));
             actions.append(button(overlaps.length?'Создать отдельную версию':'Создать с новым номером',()=>decide({allowOverlap:!!overlaps.length}),!slots.length));
             for(const entry of overlaps){
                 if(hasDetachedSources(entry)||entry.sources.length!==range.length||!entry.sources.every((source,i)=>source.id===range[i].id&&source.hash===range[i].hash))continue;
-                actions.append(button('Заменить '+entryDisplayTitle(entry,archive.entries),()=>decide({allowOverlap:true,replaceId:entry.id})));
+                actions.append(button('Заменить '+entryDisplayTitle(entry,archive.entries),()=>decide({allowOverlap:true,replaceId:entry.id,replaceVersion:entry.version})));
             }
             actions.append(button('Снять отметки',()=>{this.clearRange();this.decorateMessages();decide(null);}),button('Отмена',()=>decide(null)));
             body.append(actions);dialog.onclose=()=>{dialog.remove();resolve(choice);};dialog.showModal();
@@ -526,7 +527,7 @@ export class UI {
                     continue;
                 }
                 body.append(button('Исключить из '+title,async()=>{
-                    if(!await this.confirm('Исключить главу из части?',`Связь с «${title}» будет устранена. Часть и связанные тома получат отметку «Требует проверки».`,session))return;
+                    if(!await this.confirm('Исключить главу из части?',`Связь с «${title}» будет устранена. Часть и связанные тома получат отметку «Требует проверки».`,session,'Исключить',this.chapterBackupButton(session)))return;
                     this.e.assert(session);
                     await this.e.unlinkChapter(part.id,id);
                     dialog.close();await this.refresh(true);
@@ -534,22 +535,17 @@ export class UI {
             }
             body.append(button('Закрыть',()=>dialog.close()));dialog.onclose=()=>dialog.remove();dialog.showModal();return;
         }
-        const number=entryNumber(chapter,archive.entries);
-        if(!await this.confirm(`Удалить главу №${number}?`,'Сохранённая сводка будет удалена. Исходные сообщения останутся в чате. Если они скрыты, ты сможешь раскрыть их вручную.',session,'Удалить'))return;
+        const number=entryNumber(chapter,archive.entries),version=chapter.version;
+        if(!await this.confirm(`Удалить главу №${number}?`,'Сохранённая сводка будет удалена. Исходные сообщения останутся в чате. Если они скрыты, ты сможешь раскрыть их вручную.',session,'Удалить',this.chapterBackupButton(session)))return;
         this.e.assert(session);
-        if((await this.e.deleteChapter(id)).status==='saved')this.e.host.notify('success',`Глава №${number} удалена.`);
+        if((await this.e.deleteChapter(id,{session,version})).status==='saved')this.e.host.notify('success',`Глава №${number} удалена.`);
     }
     async regenerateEntry(e) {
         const session=this.e.session();
         if(e.type==='volume'){const ids=[...e.chapterIds];return this.generating(()=>{this.e.assert(session);return this.e.generateVolume(ids,{replaceId:e.id});},{type:'volume'});}
         if(e.type==='arc'){const ids=[...e.summaryIds];return this.generating(()=>{this.e.assert(session);return this.e.generateArc(ids,{replaceId:e.id});},{type:'arc'});}
-        if(hasDetachedSources(e))throw Error('Исходники этой копии относятся к другому чату или отсутствуют. Откройте сохранённый текст; для новых сообщений создайте новую главу.');
-        const inspected=inspectSources(this.e.host.context().chat,e.sources);
-        if(inspected.issues.length||!inspected.matches.length)throw Error('Исходные сообщения изменены или удалены. Сохранённая глава остаётся в архиве.');
-        const indices=inspected.matches.map(x=>x.index).sort((a,b)=>a-b);
-        if(indices.at(-1)-indices[0]+1!==indices.length)throw Error('Исходники больше не образуют непрерывный диапазон. Выберите новый диапазон вручную.');
-        const range=captureRange(this.e.host.context().chat,indices[0],indices.at(-1));
-        return this.generating(()=>this.generateCapturedRange(session,range,{allowOverlap:true,replaceId:e.id}),{type:'summary'});
+        const {id,version}=e;
+        return this.generating(()=>this.e.regenerateChapter(id,{session,version}),{type:'summary'});
     }
     setMemoryEnabled(enabled) {
         return this.act(()=>{const settings=this.e.settings();settings.inject=enabled;if(enabled)settings.enabled=true;this.e.host.context().saveSettingsDebounced();});
@@ -772,21 +768,31 @@ export class UI {
         const retry=button('Повторить сохранение / завершить',()=>this.act(()=>this.e.recover('complete')));
         const cancel=button(archive.pending?.type==='backup'?'Оставить копию в архиве без активности':'Вернуть исходники незавершённой операции',()=>this.act(async()=>{
             const result=await this.e.recover('restore');
-            if(result?.status==='canceled')this.showNotice('Удаление отменено. Глава сохранена.');
+            if(result?.status==='canceled')this.showNotice(cancel.dataset.deletion==='true'?'Удаление отменено. Глава сохранена.':'Неподтверждённое изменение главы отменено.');
             else if(cancel.dataset.deletion==='true'&&result?.status==='saved')this.showNotice('Сервер уже подтвердил удаление главы.');
+            else if(cancel.dataset.chapterEdit==='true'&&result?.status==='saved')this.showNotice('Сервер уже подтвердил сохранение главы.');
         }));
         recovery.append(row(retry,cancel));
         const session=this.e.optionalSession();
         if(session)this.e.pendingReceipt(session).then(note=>{
-            if(note?.intent!=='delete'||!recovery.isConnected)return;
-            retry.textContent='Проверить и завершить удаление главы';
-            cancel.textContent='Проверить и отменить удаление';
-            cancel.dataset.deletion='true';
+            if(!recovery.isConnected)return;
+            if(note?.intent==='delete'){
+                retry.textContent='Проверить и завершить удаление главы';
+                cancel.textContent='Проверить и отменить удаление';
+                cancel.dataset.deletion='true';
+            }else if(this.e.isChapterEditReceipt(note)){
+                retry.textContent='Проверить и завершить сохранение главы';
+                cancel.textContent='Проверить и отменить изменение главы';
+                cancel.dataset.chapterEdit='true';
+            }
         }).catch(()=>{});
         this.diagnosticsView?.settings(maintenance);
     }
-    async exportFullBackup() {
-        const session=this.e.session();if(!await this.confirmPromptDrafts(Object.keys(LEVELS),'экспортом копии'))return;this.e.assert(session);const file=createBackup(this.e.archive(session),this.e.settings(),{key:session.key,name:String(this.e.host.context().chatId)}),date=new Date(),stamp=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+    chapterBackupButton(session){
+        return button('Скачать резервную копию',()=>this.act(()=>this.exportFullBackup({session,includePromptDrafts:false})));
+    }
+    async exportFullBackup({session=this.e.session(),includePromptDrafts=true}={}) {
+        if(includePromptDrafts&&!await this.confirmPromptDrafts(Object.keys(LEVELS),'экспортом копии'))return;this.e.assert(session);const file=createBackup(this.e.archive(session),this.e.settings(),{key:session.key,name:String(this.e.host.context().chatId)}),date=new Date(),stamp=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
         download(`Omut_Pamyati_${stamp}.json`,JSON.stringify(file,null,2));
     }
     async readFullBackup() {
@@ -829,8 +835,8 @@ export class UI {
         if(chatScoped)dialog.dataset.chatScoped='true';
         const head=el('header',{class:'pv-header'}),close=button('×',()=>{if(dialog.dispatchEvent(new Event('cancel',{cancelable:true})))dialog.close();});close.classList.add('pv-icon');close.setAttribute('aria-label','Закрыть окно');head.append(el('h2',{},title),close);dialog.setAttribute('aria-label',title);const body=el('div',{class:'pv-content'});dialog.append(head,body);document.body.append(dialog);return {dialog,body};
     }
-    confirm(title,message,session=null,confirmLabel='Подтвердить') {
-        return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title,!!session);body.append(el('p',{},message),row(button('Отмена',()=>dialog.close()),button(confirmLabel,()=>{dialog.returnValue='yes';dialog.close();},true)));dialog.onclose=()=>{const yes=dialog.returnValue==='yes';dialog.remove();resolve(yes);};dialog.showModal();});
+    confirm(title,message,session=null,confirmLabel='Подтвердить',extraAction=null) {
+        return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title,!!session);body.append(el('p',{},message));if(extraAction)body.append(extraAction);body.append(row(button('Отмена',()=>dialog.close()),button(confirmLabel,()=>{dialog.returnValue='yes';dialog.close();},true)));dialog.onclose=()=>{const yes=dialog.returnValue==='yes';dialog.remove();resolve(yes);};dialog.showModal();});
     }
     askText(title,value) {
         return new Promise(resolve=>{const {dialog,body}=this.makeDialog(title),input=el('input',{value,'aria-label':title});body.append(input,row(button('Сохранить',()=>{dialog.returnValue='yes';dialog.close();},true),button('Отмена',()=>dialog.close())));dialog.onclose=()=>{const result=dialog.returnValue==='yes'?input.value.trim():null;dialog.remove();resolve(result);};dialog.showModal();input.focus();});
@@ -856,8 +862,14 @@ export class UI {
     }
     preview(draft) {
         return new Promise(resolve=>{
-        const heading=draft.type==='summary'&&draft.replaceId?`Перегенерация главы №${draft.chapterNumber}`:`Предварительный просмотр ${LEVELS[draft.type].genitive}`;
+        const replacement=draft.type==='summary'&&!!draft.replaceId;
+        const heading=replacement?`Перегенерация главы №${draft.chapterNumber}`:draft.restoreNumber!=null?`Воссоздание главы №${draft.restoreNumber}`:`Предварительный просмотр ${LEVELS[draft.type].genitive}`;
         const {dialog,body}=this.makeDialog(heading,true);this.editor=dialog;
+        if(replacement){
+            const index=hierarchyIndex(this.e.archive(draft.session).entries),entry=index.byId.get(draft.replaceId);
+            if(entry&&index.ancestors(entry).length)body.append(el('p',{class:'pv-warning'},'Связанные части и тома получат отметку «Требует проверки». Их тексты останутся прежними.'));
+        }
+        if(draft.ambiguousChapterSlot)body.append(el('p',{class:'pv-warning'},`Порядок относительно других глав неоднозначен. Сохранение подтвердит прежний номер ${draft.restoreNumber}.`));
         const title=el('input',{value:draft.title,'aria-label':'Название воспоминания'}),text=el('textarea',{'aria-label':'Текст воспоминания'},draft.text);
         body.append(field('Название',title),field('Текст — можно отредактировать перед сохранением',text));
         const warning=el('p',{class:'pv-warning',role:'status'});
@@ -867,7 +879,7 @@ export class UI {
         const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;const previewJob=owned();if(previewJob)previewJob.previewStatus=notice;
         const finish=()=>{if(finished)return;finished=true;dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};
         const minimize=button('−',()=>{const job=owned();if(job)this.generationView.minimize(job);});minimize.className='pv-icon';minimize.setAttribute('aria-label','Свернуть окно воспоминания');dialog.querySelector('.pv-header button').before(minimize);
-        const save=button(draft.type==='summary'&&draft.replaceId?'Заменить сводку':'Сохранить',async()=>{
+        const save=button(replacement?'Заменить сводку':draft.restoreNumber!=null?`Сохранить главу №${draft.restoreNumber}`:'Сохранить',async()=>{
             if(saving)return;
             saving=true;save.disabled=true;regen.disabled=true;const job=owned();if(job){job.previewError='';job.previewSaving=true;this.generationView.paint(job);}
             try{const saved=await this.e.saveDraft(draft,{title:title.value,text:text.value});await this.episodeSaved(draft);dialog.savedEntry=saved;if(dialog.open)dialog.close();else finish();this.postSaveRefresh();this.showNotice('Воспоминание сохранено.');}
@@ -875,7 +887,9 @@ export class UI {
             finally{saving=false;save.disabled=false;if(draft.commitId&&!finished)save.textContent='Повторить проверку сохранения';regen.disabled=!!draft.commitId;if(job){job.previewSaving=false;this.generationView.paint(job);}}
         },true);
         const regen=button('Повторить генерацию',async()=>{save.disabled=true;regen.disabled=true;try{if(await this.confirmPromptDrafts([draft.type],'повторной генерацией')){await this.e.regenerate(draft);text.value=draft.text;updateWarning();}}catch(error){notice.textContent=this.issue(error,{severity:'error'});}finally{save.disabled=false;regen.disabled=false;}});
-        body.append(row(save,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(!saving)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(this.e.busy)this.e.cancel();dialog.close();})));
+        const actions=row(save,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(!saving)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(this.e.busy)this.e.cancel();dialog.close();}));
+        if(replacement||draft.restoreNumber!=null)actions.append(this.chapterBackupButton(draft.session));
+        body.append(actions);
         dialog.oncancel=event=>{if(saving){event.preventDefault();minimize.click();}else if(this.e.busy)this.e.cancel();};dialog.onclose=()=>{if(dialog.pensieveMinimizeClosures){dialog.pensieveMinimizeClosures--;return;}finish();};dialog.showModal();
         });
     }
