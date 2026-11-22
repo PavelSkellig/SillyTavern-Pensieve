@@ -13,7 +13,7 @@ export function operationLabel(op={}){
     if(op.stage==='tokens')return `Проверяю токены${title}${op.outcome==='saved'?' · Запись подтверждена':''}`;
     if(op.stage==='confirm')return `Проверяю сохранение${title}${op.attempt?` · Проверка ${op.attempt}/3`:''}`;
     if(op.stage==='write')return `Сохраняю ${target}${title}`;
-    if(op.stage==='api')return `Создаю ${target}${title} · Другой запрос к модели должен подождать`;
+    if(op.stage==='api')return `Создаю ${target}${title}${op.segments>1?` · Фрагмент ${op.segment}/${op.segments}`:''} · Другой запрос к модели должен подождать`;
     return 'Операция выполняется';
 }
 const node=(tag,className='',text='')=>{const n=document.createElement(tag);n.className=className;n.textContent=text;return n;};
@@ -57,13 +57,13 @@ export class GenerationView {
         if(job.previewStatus?.isConnected&&(job.previewSaving||['waiting','error'].includes(job.operation?.state))){const op=job.operation??{},result=op.outcome==='saved'?'подтверждено':op.outcome==='missing'?'запись не обнаружена':'результат неизвестен';job.previewStatus.textContent=[job.previewError,operationLabel(op),op.lastCheck?`Последняя проверка: ${new Date(op.lastCheck).toLocaleTimeString()} · ${result}`:''].filter(Boolean).join('\n');}
         job.message.textContent=job.operation&&['running','saving','confirming','recovering','waiting'].includes(job.operation.state)?operationLabel(job.operation):saving?'Результат получен. Проверяется сохранение на сервере…':'Генерация выполняется. Можно свернуть окно и продолжить пользоваться чатом.';
         job.retry.hidden=!error;job.retry.disabled=!error;job.retry.textContent=job.phase==='save'?'Повторить сохранение':job.phase==='preview'?'Показать результат повторно':'Повторить запрос';job.cancel.textContent=error?'Закрыть':'Отменить генерацию';job.cancel.disabled=saving;job.close.disabled=saving;
-        const label=labels[job.type],op=job.operation;const title=job.status==='ready'?label.ready:op&&['running','saving','confirming','recovering','waiting','error','saved'].includes(op.state)?operationLabel(op):error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Сохраняется '+label.making:'Создаётся '+label.making;
+        const label=labels[job.type],op=job.operation;const title=job.status==='ready'?(job.draft?.truncated?'Есть неполный черновик':label.ready):op&&['running','saving','confirming','recovering','waiting','error','saved'].includes(op.state)?operationLabel(op):error?'Ошибка создания '+LEVELS[job.type].genitive:saving?'Сохраняется '+label.making:'Создаётся '+label.making;
         this.dock.replaceChildren(button(`Омут памяти · ${title} · Развернуть`,()=>this.restore(job)));this.dock.hidden=!job.windowHidden||!!job.noticeCovered;this.dock.setAttribute('aria-busy',String(!!this.engine.busy));
     }
     minimize(job) {
         if(this.job!==job||!['running','saving','ready','error','preview'].includes(job.status))return;
         job.minimized=true;job.windowHidden=true;const dialog=job.previewDialog?.isConnected?job.previewDialog:job.dialog;
-        if(dialog.open){if(dialog===job.previewDialog)dialog.pensieveMinimizeClosures=(dialog.pensieveMinimizeClosures??0)+1;dialog.close();}this.onMinimize();this.paint(job);
+        if(dialog?.open){if(dialog===job.previewDialog)dialog.pensieveMinimizeClosures=(dialog.pensieveMinimizeClosures??0)+1;dialog.close();}this.onMinimize();this.paint(job);
     }
     restore(job) {
         if(!this.current(job)||!['running','saving','ready','error','preview'].includes(job.status))return;

@@ -1,7 +1,7 @@
 import {trace,tagError,errorMeta} from './diagnostics.js';
 import {normalisePromptPresets,mergePromptGroups} from './prompt-presets.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
-import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, chapterRangeKey, fingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives} from './core.js';
+import {KEY, defaults, emptyArchive, clone, bytes, MAX_ARCHIVE_BYTES, WARN_ARCHIVE_BYTES, captureRange, sourceText, sourceRecord, chapterRangeKey, chapterSourceKey, fingerprint, matchesSourceFingerprint, inspectSources, findOverlaps, chronological, memoryText, memoryEntries, memoryConflicts, reviseEntry, mergeArchives, resolveImportedChapterNumbers} from './core.js';
 import {narrativeOrder} from './order.js';
 import {childrenIds,hierarchyIndex,LEVELS,entryNumber,nextNumber} from './hierarchy.js';
 import {parseBackup,planRestore,validatePromptGroups,validateBackupSettings} from './backup.js';
@@ -9,6 +9,7 @@ import {importedSourceConflicts,hasDetachedSources} from './core.js';
 import {memorySources,stripMemorySources} from './source-links.js';
 import {SAVE_POLICY,bounded,verifyWrite,SaveJournal,archiveStamp,sameSavedValue,archiveBody,captureSourceState,sourceProof,matchesSourceProof,sourceOutcome,chatStamp,deletionChatStamp,exclusionAfterDeletion} from './save-recovery.js';
 import {createCompression,editCompression} from './compression.js';
+import {appendContinuation,chapterSegments,continuationRequest,inputBudget} from './generation.js';
 
 export class Engine {
     constructor(host) {this.host=host;this.busy=false;this.cancelled=false;this.memoryEpoch=0;this.diagnosticState='idle';this.operation={state:'idle',stage:'idle',outcome:null};this.operationListeners=new Set();this.recovery=host.recovery??=new SaveJournal();this.nativeWrites=host.saveWrites??=new Map();host.setEngine?.(this);}
@@ -52,54 +53,103 @@ export class Engine {
     }
     checkRange(s,range) {
         this.assert(s);
-        for(const source of range)if(!s.chat.includes(source.ref)||fingerprint(source.ref)!==source.hash)throw Error('Исходные сообщения изменились после выбора или генерации. Создайте предварительный просмотр заново.');
+        for(const source of range)if(!s.chat.includes(source.ref)||!matchesSourceFingerprint(source.ref,source.hash))throw Error('Исходные сообщения изменились после выбора или генерации. Создайте предварительный просмотр заново.');
         const first=s.chat.indexOf(range[0].ref);
         if(range.some((source,i)=>s.chat[first+i]!==source.ref))throw Error('Порядок или непрерывность выбранного диапазона изменились. Выберите сообщения заново.');
     }
-    async generateDraft(draft) {
+    async generateDraft(draft,{continuing=false,retry=false,previousText=draft.text}={}) {
         const s=draft.session;this.assert(s);
         const configuration=this.host.configuration?.();
-        let source;
+        let source,sourceCount;
         if(draft.type==='summary') {
             if(draft.replaceId){
                 const entry=this.chapterTarget(s,draft.replaceId,draft.replaceVersion);
                 draft.range=this.originalChapterRange(s,entry);
             }else this.checkRange(s,draft.range);
             source=sourceText(draft.range);
+            sourceCount=draft.range.length;
         }
         else {
             const entries=this.archive(s).entries;
             const chosen=childrenIds(draft).map(id=>entries.find(e=>e.id===id));
             if(chosen.some((e,i)=>!e||e.version!==draft.sourceVersions[i]))throw Error('Исходные записи изменились. Выберите их заново.');
             source=chosen.map(e=>`${e.title}\n${e.text}`).join('\n\n');
+            sourceCount=chosen.length;
         }
         this.setOperation({stage:'tokens',type:draft.type,title:draft.title,owner:s.key,scope:this.recovery.key(s.key)});
         const preset=this.prompt(draft.type),limits=trace({code:'MEM-005',stage:'tokens'},()=>this.host.limits());
-        const tokens=await trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.host.count(`${preset.text}\n\n${source}`),this.policy().tokensTimeout));
-        this.assert(s);
-        if(this.cancelled)throw tagError(Error('Генерация отменена до отправки запроса.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
-        if(!Number.isFinite(tokens)||!Number.isFinite(limits.context))throw tagError(Error('Не удалось проверить лимит контекста модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
-        const requested={summary:2048,arc:3072,volume:4096}[draft.type];
-        const responseLength=Math.min(requested,Math.floor(limits.context-tokens)-32);
-        if(responseLength<1)throw tagError(Error('Исходный текст и промпт не оставляют места для ответа. Уменьшите диапазон или число записей.'),{code:'MEM-005',stage:'tokens',reason:'context-local'});
-        const unlock=this.host.lock?.();let generated;
+        if(!Number.isFinite(limits.context)||!Number.isFinite(limits.output)||limits.output<1)
+            throw tagError(Error('Не удалось проверить лимиты контекста и ответа модели.'),{code:'MEM-005',stage:'tokens',reason:'limits-unavailable'});
+        const count=async (prompt,body)=>{
+            const value=await trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.host.count(prompt+'\n\n'+body),this.policy().tokensTimeout));
+            this.checkGeneration(s,configuration);
+            if(!Number.isFinite(value)||value<0)throw tagError(Error('Не удалось подсчитать объём запроса.'),{code:'MEM-005',stage:'tokens',reason:'count-invalid'});
+            return Math.ceil(value);
+        };
+        const state=continuing?{...draft.generationBatch}:{
+            index:0,resume:false,preset:preset.text,
+            chunks:draft.type==='summary'?await chapterSegments(preset.text,draft.range,source,limits,count):[{prompt:preset.text,source,tokens:await count(preset.text,source)}],
+        };
+        if(continuing&&state.preset!==preset.text)throw Error('Промпт изменился. Запустите генерацию заново, чтобы применить его.');
+        let text=continuing?previousText:'',finish='unknown',interrupted=false,reasoningAmbiguous=continuing&&draft.reasoningAmbiguous;
+        const generationId=continuing?draft.generationId:this.host.uuid?.();
+        while(state.index<state.chunks.length){
+            const chunk=state.chunks[state.index];
+            const request=state.resume?await continuationRequest(chunk,text,limits.context,count):{...chunk,tokens:continuing?await count(chunk.prompt,chunk.source):chunk.tokens};
+            if(!request)throw Error('Не хватает места в контексте для продолжения этого фрагмента. Увеличьте контекст или запустите генерацию заново.');
+            const meta={id:generationId,kind:continuing?'continue':draft.replaceId||retry?'regenerate':'create',level:draft.type,
+                target:draft.replaceId,number:draft.chapterNumber,sourceCount,segment:state.index+1,segments:state.chunks.length};
+            let result;
+            try{
+                result=await this.requestGeneration(s,configuration,request,limits,meta);
+            }catch(error){
+                this.checkGeneration(s,configuration);
+                const failure=errorMeta(error);
+                if(!text.trim()||failure.code==='GEN-006'||failure.stage!=='api'&&failure.stage!=='response')throw error;
+                finish=error.name==='TimeoutError'||failure.code==='GEN-003'?'timeout':'error';
+                interrupted=true;break;
+            }
+            text=state.resume?appendContinuation(text,result.text):text?text+'\n\n'+result.text:result.text;
+            reasoningAmbiguous=reasoningAmbiguous||result.ambiguous;
+            finish=result.finish;
+            if(result.truncated||result.interrupted){state.resume=true;interrupted=result.interrupted;break;}
+            state.resume=false;state.index++;
+        }
+        Object.assign(draft,{text,finish,truncated:state.index<state.chunks.length,interrupted,reasoningAmbiguous,preset:preset.name,
+            compressionSource:source,generationId,generationBatch:state});
+        return draft;
+    }
+    checkGeneration(session,configuration){
+        this.assert(session);
+        if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
+        if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
+    }
+    async requestGeneration(session,configuration,{prompt,source,tokens},limits,meta){
+        const responseLength=Math.min(Math.floor(limits.output),inputBudget(limits.context,tokens));
+        if(responseLength<1)throw tagError(Error('В контексте не осталось места для ответа. Уменьшите диапазон или число записей.'),{code:'MEM-005',stage:'tokens',reason:'context-local'});
+        this.checkGeneration(session,configuration);
+        const unlock=this.host.lock?.();
+        let request={},metrics={...meta,context:limits.context,configuredOutput:limits.output,input:tokens,requestedOutput:responseLength};
         try {
-            this.setOperation({stage:'api'});
-            generated=await trace({code:'GEN-001',stage:'api',operation:'generate-'+draft.type,snapshot:{macroUsed:false,generation:'running'}},()=>this.host.generate(preset.text,source,{responseLength}));
-            this.assert(s);
-            if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'api',reason:this.cancelReason??'cancel-user'});
-            if(configuration!==this.host.configuration?.())throw Error('Подключение к модели изменилось во время запроса. Повторите генерацию.');
-        } finally {try{unlock?.();}catch(error){this.host.report?.(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}),{severity:'warning'});try{this.host.emergencyUnlock?.();}catch(failure){this.host.report?.(failure,{code:'INT-004',stage:'unlock',reason:'release',notify:false});}}}
-        const raw=typeof generated==='string'?generated:generated?.text;
-        if(typeof raw!=='string')throw tagError(Error('Модель вернула некорректный формат ответа. Исходные сообщения не изменены.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
-        const cleaned=await this.host.cleanReasoning?.(raw)??{text:raw,ambiguous:false};
-        this.assert(s);if(this.cancelled)throw tagError(Error('Генерация отменена.'),{code:'GEN-006',stage:'response',reason:this.cancelReason??'cancel-user'});
-        if(!cleaned.text.trim())throw tagError(Error('Модель не вернула текст воспоминания.'),{code:generated?.truncated?'GEN-007':'GEN-004',stage:'response',reason:generated?.truncated?'truncated':'empty'});
-        draft.text=cleaned.text;
-        draft.truncated=generated?.truncated===true;
-        draft.interrupted=generated?.interrupted===true;
-        draft.reasoningAmbiguous=cleaned.ambiguous;
-        draft.preset=preset.name;draft.compressionSource=source;return draft;
+            this.setOperation({stage:'api',segment:meta.segment,segments:meta.segments});
+            const generated=await trace({code:'GEN-001',stage:'api',operation:'generate-'+meta.level,snapshot:{macroUsed:false,generation:'running'}},
+                ()=>this.host.generate(prompt,source,{responseLength,onRequest:parameters=>request=parameters}));
+            this.checkGeneration(session,configuration);
+            const raw=typeof generated==='string'?generated:generated?.text;
+            const finish=generated?.finish??(generated?.truncated?'length':'unknown');
+            metrics={...metrics,finish,received:generated?.received,reportedInput:generated?.reportedInput,stream:generated?.stream??request.stream};
+            if(typeof raw!=='string')throw tagError(Error('Модель вернула некорректный формат ответа.'),{code:'GEN-005',stage:'response',reason:'invalid-response'});
+            const cleaned=await this.host.cleanReasoning?.(raw)??{text:raw,ambiguous:false};
+            this.checkGeneration(session,configuration);
+            if(!cleaned.text.trim())throw tagError(Error('Модель вернула пустой текст воспоминания.'),{code:generated?.truncated?'GEN-007':'GEN-004',stage:'response',reason:generated?.truncated?'truncated':'empty'});
+            return {...cleaned,finish,truncated:generated?.truncated===true,interrupted:generated?.interrupted===true};
+        }catch(error){
+            metrics.finish??=request.finish??(this.cancelled||error.name==='AbortError'?'canceled':error.name==='TimeoutError'?'timeout':'error');
+            throw error;
+        }finally{
+            this.host.diagnostics?.recordGeneration?.({...request,...metrics});
+            try{unlock?.();}catch(error){this.host.report?.(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}),{severity:'warning'});try{this.host.emergencyUnlock?.();}catch(failure){this.host.report?.(failure,{code:'INT-004',stage:'unlock',reason:'release',notify:false});}}
+        }
     }
     chapterTarget(session,id,version){
         const entry=this.archive(session).entries.find(item=>item.id===id&&item.type==='summary');
@@ -113,22 +163,26 @@ export class Engine {
         const first=matches[0]?.index;
         if(issues.length||first===undefined||matches.some(({index},offset)=>index!==first+offset))
             throw Error('Не удалось восстановить исходный диапазон главы: сообщения изменены, удалены или идут в другом порядке. Сохранённая глава остаётся в архиве.');
-        return captureRange(session.chat,first,matches.at(-1).index);
+        return captureRange(session.chat,first,matches.at(-1).index).map((source,i)=>({...source,hash:entry.sources[i].hash}));
     }
     chapterSlotsForRange(archive,range,chat=this.session().chat){
-        const rangeKey=chapterRangeKey(range);
-        if(!rangeKey)return [];
+        if(!archive.chapterSlots?.length)return [];
+        const rangeKey=chapterRangeKey(range),sourceKey=chapterSourceKey(range);
         const chapters=archive.entries.filter(entry=>entry.type==='summary');
         const numbers=new Map(chapters.map(entry=>[entry.id,Number(entryNumber(entry,archive.entries))]));
         const occupied=new Set(numbers.values());
-        const slots=(archive.chapterSlots??[]).filter(slot=>slot.rangeKey===rangeKey&&!occupied.has(slot.number));
-        if(!slots.length)return slots;
         const {ranges}=narrativeOrder(chapters,archive.entries,chat),start=chat.indexOf(range[0].ref),end=chat.indexOf(range.at(-1).ref);
-        return slots.map(slot=>({...slot,ambiguous:slots.length>1||chapters.some(entry=>{
+        const fits=slot=>!chapters.some(entry=>{
             const position=ranges.get(entry.id),number=numbers.get(entry.id);
             if(!position||position.historical||!Number.isSafeInteger(number))return true;
             return position.end<start?number>=slot.number:position.start>end?number<=slot.number:true;
-        })}));
+        });
+        const free=(archive.chapterSlots??[]).filter(slot=>!occupied.has(slot.number));
+        const exact=free.filter(slot=>slot.rangeKey===rangeKey);
+        if(exact.length)return exact.map(slot=>({...slot,ambiguous:exact.length>1||!fits(slot)}));
+        const sameIds=free.filter(slot=>slot.sourceKey&&slot.sourceKey===sourceKey);
+        if(sameIds.length)return sameIds.map(slot=>({...slot,ambiguous:sameIds.length>1||!fits(slot)}));
+        return free.filter(slot=>!slot.sourceKey&&sourceKey&&fits(slot)).map(slot=>({...slot,ambiguous:true}));
     }
     async regenerateChapter(id,{session=null,version=null}={}){
         return this.run(async()=>{
@@ -138,20 +192,22 @@ export class Engine {
             return this.generateDraft({session:s,type:'summary',replaceId:id,replaceVersion:entry.version,chapterNumber,title:entry.title});
         });
     }
-    async generateSummary(start,end,{allowOverlap=false,replaceId=null,replaceVersion=null,restoreNumber=null}={}) {
+    async generateSummary(start,end,{allowOverlap=false,replaceId=null,replaceVersion=null,restoreNumber=null,newChapterNumber=false}={}) {
         return this.run(async()=>{
             const s=this.session();
             if(this.archive(s).pending||await this.pendingReceipt(s))throw Error('Сначала завершите или восстановите незавершённую операцию в настройках.');
             const archive=this.archive(s);
             const range=captureRange(s.chat,start,end),overlaps=findOverlaps(archive.entries,range);
             const old=replaceId?this.chapterTarget(s,replaceId,replaceVersion):null;
-            const rangeKey=chapterRangeKey(range);
-            if(replaceId&&(!old||hasDetachedSources(old)||!rangeKey||chapterRangeKey(old.sources)!==rangeKey))throw Error('Исходный диапазон главы изменился. Сохранённая глава не будет заменена.');
+            if(old&&(hasDetachedSources(old)||old.sources.length!==range.length||old.sources.some((source,i)=>source.id!==range[i].id||!matchesSourceFingerprint(range[i].ref,source.hash))))
+                throw Error('Исходный диапазон главы изменился. Сохранённая глава не будет заменена.');
             if(overlaps.length&&!allowOverlap&&!old)throw Error('Диапазон пересекается с уже обработанными сообщениями. Разрешите отдельную версию или выберите запись для замены.');
-            const slot=restoreNumber===null?null:this.chapterSlotsForRange(archive,range,s.chat).find(item=>item.number===restoreNumber);
+            const slots=old?[]:this.chapterSlotsForRange(archive,range,s.chat);
+            const slot=restoreNumber!==null?slots.find(item=>item.number===restoreNumber):slots.find(item=>!item.ambiguous);
             if(restoreNumber!==null&&!slot)throw Error('Прежний номер не соответствует этому диапазону или уже занят.');
+            if(!slot&&slots.length&&!newChapterNumber)throw Error('Выберите и подтвердите номер главы перед генерацией.');
             const number=old?Number(entryNumber(old,archive.entries)):slot?.number??Math.max(nextNumber('summary',archive.entries),...(archive.chapterSlots??[]).map(item=>item.number+1));
-            return this.generateDraft({session:s,type:'summary',range,replaceId,replaceVersion:old?.version,chapterNumber:number,restoreNumber,ambiguousChapterSlot:slot?.ambiguous===true,title:old?.title??`Глава №${number}`,order:start});
+            return this.generateDraft({session:s,type:'summary',range,replaceId,replaceVersion:old?.version,chapterNumber:number,restoreNumber:slot?.number??null,ambiguousChapterSlot:slot?.ambiguous===true,title:old?.title??`Глава №${number}`,order:start});
         });
     }
     generateArc(ids,options={}) {return this.generateCollection('arc',ids,options);}
@@ -173,7 +229,15 @@ export class Engine {
         return this.run(async()=>{
             this.assert(draft.session);
             if(draft.commitId||this.archive(draft.session).pending||await this.pendingReceipt(draft.session))throw Error('Сначала проверьте результат предыдущего сохранения.');
-            return this.generateDraft(draft);
+            return this.generateDraft(draft,{retry:true});
+        });
+    }
+    async continueDraft(draft,previousText){
+        return this.run(async()=>{
+            this.assert(draft.session);
+            if(!draft.truncated||!draft.generationBatch||typeof previousText!=='string'||!previousText.trim())throw Error('Нет частичного текста для продолжения.');
+            if(draft.commitId||this.archive(draft.session).pending||await this.pendingReceipt(draft.session))throw Error('Сначала проверьте результат предыдущего сохранения.');
+            return this.generateDraft(draft,{continuing:true,previousText});
         });
     }
     journalKey(s,note=null){return note?.__journalKey??this.recovery.key(s.key);}
@@ -256,6 +320,7 @@ export class Engine {
     }
     async refreshAfterSave(s,entry){
         this.assert(s);this.setOperation({state:'saved',stage:'saved',outcome:'saved',recordConfirmed:true,entryId:entry.id,type:entry.type,title:entry.title});
+        this.host.diagnostics?.markGeneration?.(null,'saved',entry.id);
         bounded(()=>this.refreshMemory(),this.policy().tokensTimeout).catch(error=>this.host.report?.(tagError(error,{code:'MEM-005',stage:'tokens'}),{operation:'save-'+entry.type,severity:'warning'}));return entry;
     }
     async pendingReceipt(s){const key=this.recovery.key(s.key),note=await bounded(()=>this.recovery.get(s.key,key),this.policy().readTimeout);this.assert(s);return this.pinReceipt(note,key);}
@@ -472,7 +537,7 @@ export class Engine {
             if(checked.status==='saved')return this.finishReceipt(s,note,checked.disk);
             await this.settledReceipt(s,note,checked.disk);
             if(archiveStamp(checked.disk.metadata?.[KEY]??emptyArchive(s.key))!==note.base)throw this.receiptError('state-changed');
-            if(restore){await this.clearReceipt(s,note);this.setOperation({state:'canceled',outcome:null});return {status:'canceled'};}
+            if(restore){await this.clearReceipt(s,note);this.host.diagnostics?.markGeneration?.(null,'canceled',note.entryId);this.setOperation({state:'canceled',outcome:null});return {status:'canceled'};}
             return this.persistChapterEdit(s,note);
         }
         await this.settledReceipt(s,note,checked.disk);this.guardLive(s,note,checked.disk);
@@ -498,8 +563,11 @@ export class Engine {
             if(archiveStamp(previous)!==note.base||archiveStamp(this.archive(s))!==note.base
                 ||archiveStamp(disk.metadata?.[KEY]??emptyArchive(s.key))!==note.base)throw Error('Архив изменился. Откройте актуальную версию чата перед сохранением.');
             this.originalChapterRange(s,target);
-            if(!sameSavedValue(disk.messages,s.chat)||!sourceOutcome(note,disk.messages))throw Error('Проверьте, что текущая переписка сохранена на сервере, и повторите сохранение главы.');
-            messages=disk.messages;
+            const sameChat=sameSavedValue(disk.messages,s.chat)
+                ||this.host.normaliseSavedChat&&sameSavedValue(this.host.normaliseSavedChat(disk.messages),this.host.normaliseSavedChat(s.chat));
+            if(!sameChat||!sourceOutcome(note,disk.messages))
+                throw Error('Проверьте, что текущая переписка сохранена на сервере, и повторите сохранение главы.');
+            messages=clone(s.chat);
         }catch(error){
             if(draft)await this.clearReceipt(s,note);
             throw error;
@@ -565,7 +633,7 @@ export class Engine {
         const occupied=archive.entries.some(item=>item.type==='summary'&&item.chapterNumber===number);
         if(rangeKey&&Number.isSafeInteger(number)&&number>0&&!occupied){
             archive.chapterSlots=(archive.chapterSlots??[]).filter(slot=>slot.number!==number);
-            archive.chapterSlots.push({number,rangeKey});
+            archive.chapterSlots.push({number,rangeKey,sourceKey:chapterSourceKey(entry.sources)});
         }
         const operationId=this.host.uuid();
         archive.owner=s.key;
@@ -633,7 +701,8 @@ export class Engine {
             return {status:'waiting'};
         }
         if(!saved&&(deletionChatStamp(s.chat,note.entryId)!==note.deleteChat
-            ||deletionChatStamp(disk.messages,note.entryId)!==note.deleteChat))throw this.receiptError('source-changed');
+            ||deletionChatStamp(disk.messages,note.entryId)!==note.deleteChat
+            &&deletionChatStamp(this.host.normaliseSavedChat?.(disk.messages)??disk.messages,note.entryId)!==note.deleteChat))throw this.receiptError('source-changed');
         if(!saved)await this.keepReceipt(s,note);
         this.assert(s);
         if(this.archive(s)!==old||!saved&&deletionChatStamp(s.chat,note.entryId)!==note.deleteChat)throw this.receiptError('state-changed');
@@ -681,6 +750,7 @@ export class Engine {
         return this.change((a,s)=>{
             if(mode==='replace'&&s.chat.some(m=>m.extra?.[KEY]?.exclusion?.owners.length))throw Error('Перед заменой архива восстановите все исходники. Объединение доступно без этого.');
             const result=mode==='replace'?clone(incoming):mergeArchives(a,incoming,()=>this.host.uuid());
+            if(mode==='replace')resolveImportedChapterNumbers([],result.entries,a.chapterSlots);
             a.entries=result.entries;a.pending=null;
         });
     }
@@ -847,4 +917,14 @@ export class Engine {
 const operationMeta={generateSummary:{operation:'generate-summary',stage:'handler'},regenerateChapter:{operation:'generate-summary',stage:'handler'},generateArc:{operation:'generate-arc',stage:'handler'},generateVolume:{operation:'generate-volume',stage:'handler'},memory:{code:'MEM-002',stage:'active',operation:'context'},prepareContext:{code:'MEM-009',stage:'handoff',operation:'context'},refreshMemory:{code:'MEM-007',stage:'injection',operation:'context'},restoreBackup:{code:'DATA-009',stage:'restore',operation:'backup-restore'},importArchive:{code:'DATA-007',stage:'import',operation:'backup-import'},recover:{code:'DATA-009',stage:'restore',operation:'backup-restore'},change:{code:'DATA-010',stage:'save',operation:'archive-edit'},deleteChapter:{code:'DATA-010',stage:'save',operation:'archive-edit'}};
 for(const [name,meta]of Object.entries(operationMeta)){const method=Engine.prototype[name];Engine.prototype[name]=function(...args){return trace(meta,()=>method.apply(this,args));};}
 const saveDraft=Engine.prototype.saveDraft;
-Engine.prototype.saveDraft=function(draft,...args){const code={episode:'DATA-001',summary:'DATA-002',arc:'DATA-003',volume:'DATA-004'}[draft?.type]??'DATA-010';return trace({code,stage:'save',operation:'save-'+draft?.type},()=>saveDraft.call(this,draft,...args));};
+Engine.prototype.saveDraft=async function(draft,...args){
+    const code={episode:'DATA-001',summary:'DATA-002',arc:'DATA-003',volume:'DATA-004'}[draft?.type]??'DATA-010';
+    try{
+        const entry=await trace({code,stage:'save',operation:'save-'+draft?.type},()=>saveDraft.call(this,draft,...args));
+        if(draft?.generationId)this.host.diagnostics?.markGeneration?.(draft.generationId,'saved',entry.id);
+        return entry;
+    }catch(error){
+        if(draft?.generationId)this.host.diagnostics?.markGeneration?.(draft.generationId,draft.commitId&&this.operation.state==='waiting'?'waiting':'error',draft.commitId);
+        throw error;
+    }
+};

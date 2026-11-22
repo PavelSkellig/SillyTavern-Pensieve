@@ -1,5 +1,5 @@
 import {BUILTIN_PROMPTS} from './builtin-prompts.js';
-import {childrenIds,hierarchyIndex,LEVELS} from './hierarchy.js';
+import {childrenIds,entryNumber,hierarchyIndex,LEVELS} from './hierarchy.js';
 import {DEFAULT_INJECTION_TEMPLATE} from './placement.js';
 import {validateCompression} from './compression.js';
 export const KEY = 'pensieve';
@@ -35,19 +35,29 @@ export function captureRange(chat, start, end) {
     if(!Number.isInteger(start)||!Number.isInteger(end)||start<0||end<start||end>=chat.length) throw Error('Укажите прямой диапазон существующих сообщений. Номера в панели начинаются с 1.');
     return chat.slice(start,end+1).map((m,i)=>({ref:m,index:start+i,id:m.extra?.[KEY]?.id??null,hash:fingerprint(m),name:m.name??'',text:m.mes??'',previousHidden:!!m.is_system}));
 }
+export function matchesSourceFingerprint(message,hash,observed=fingerprint(message)){
+    if(observed===hash)return true;
+    // SillyTavern can initialize the first swipe when it renders an older message.
+    if(message.swipe_id!=null&&message.swipe_id!==0)return false;
+    return fingerprint({...message,swipe_id:message.swipe_id===0?null:0})===hash;
+}
 export const sourceText = range => range.map(s=>`${s.name}:\n${s.text}`).join('\n\n');
 export const sourceRecord = s => ({id:s.id,hash:s.hash,index:s.index,previousHidden:s.previousHidden});
 export const chapterRangeKey=range=>range.length&&range.every(source=>source.id&&source.hash)
     ? fingerprint({name:'chapter-range',mes:JSON.stringify(range.map(({id,hash})=>[id,hash]))})
+    : null;
+export const chapterSourceKey=range=>range.length&&range.every(source=>source.id)
+    ? fingerprint({name:'chapter-sources',mes:JSON.stringify(range.map(source=>source.id))})
     : null;
 
 export function validateChapterSlots(slots){
     if(!Array.isArray(slots)||slots.length>10000)throw Error('Некорректный список освободившихся номеров глав.');
     const seen=new Set();
     return slots.map(slot=>{
-        if(!slot||!Number.isSafeInteger(slot.number)||slot.number<1||!/^[a-f0-9]{32}$/.test(slot.rangeKey)||seen.has(slot.number))throw Error('Некорректный свободный номер главы.');
+        if(!slot||!Number.isSafeInteger(slot.number)||slot.number<1||!/^[a-f0-9]{32}$/.test(slot.rangeKey)
+            ||slot.sourceKey!==undefined&&!/^[a-f0-9]{32}$/.test(slot.sourceKey)||seen.has(slot.number))throw Error('Некорректный свободный номер главы.');
         seen.add(slot.number);
-        return {number:slot.number,rangeKey:slot.rangeKey};
+        return {number:slot.number,rangeKey:slot.rangeKey,...(slot.sourceKey?{sourceKey:slot.sourceKey}:{})};
     });
 }
 
@@ -59,7 +69,7 @@ export function inspectSources(chat, sources) {
         const found=s.id?byId.get(s.id):null;
         const result=found?.length===1?found[0]:null;
         if(!result) {issues.push({source:s,reason:found?.length>1?'ambiguous':'missing'}); continue;}
-        if(fingerprint(result.message)!==s.hash) {issues.push({source:s,reason:'changed'});continue;}
+        if(!matchesSourceFingerprint(result.message,s.hash)) {issues.push({source:s,reason:'changed'});continue;}
         matches.push({...result,source:s,moved:result.index!==s.index});
     }
     return {matches,issues};
@@ -155,8 +165,27 @@ export function parseArchive(text) {
     result.entries.forEach(e=>e.imported=true);
     return result;
 }
+export function resolveImportedChapterNumbers(existing,added,slots=[]){
+    const entries=[...existing,...added],numbers=new Map(entries.filter(entry=>entry.type==='summary').map(entry=>[entry.id,Number(entryNumber(entry,entries))]));
+    const used=new Set(existing.filter(entry=>entry.type==='summary').map(entry=>numbers.get(entry.id)));
+    const reserved=new Map(slots.map(slot=>[slot.number,slot]));
+    let next=1;
+    for(const number of [...numbers.values(),...reserved.keys()])if(Number.isSafeInteger(number)&&number>=next)next=number+1;
+    for(const entry of added){
+        if(entry.type!=='summary')continue;
+        const number=numbers.get(entry.id),slot=reserved.get(number);
+        const matchingSlot=slot&&!hasDetachedSources(entry)&&slot.rangeKey===chapterRangeKey(entry.sources);
+        if(used.has(number)||slot&&!matchingSlot){
+            if(!Number.isSafeInteger(next))throw Error('Не осталось свободного номера для импортируемой главы.');
+            entry.chapterNumber=next++;
+        }
+        used.add(entry.chapterNumber??number);
+    }
+}
 export function mergeArchives(original,incoming,uuid) {
     const result=clone(original), map=new Map(incoming.entries.map(e=>[e.id,uuid()]));
-    result.entries.push(...clone(incoming.entries).map(e=>({...e,id:map.get(e.id),summaryIds:e.summaryIds.map(id=>map.get(id)),...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>map.get(id))}:{}),imported:true})));
+    const added=clone(incoming.entries).map(e=>({...e,id:map.get(e.id),summaryIds:e.summaryIds.map(id=>map.get(id)),...(e.type==='volume'?{chapterIds:e.chapterIds.map(id=>map.get(id))}:{}),imported:true}));
+    resolveImportedChapterNumbers(result.entries,added,result.chapterSlots);
+    result.entries.push(...added);
     return result;
 }

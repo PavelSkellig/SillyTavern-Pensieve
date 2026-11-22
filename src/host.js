@@ -2,6 +2,7 @@ import {Diagnostics,trace,tagError,diagnosticSnapshot} from './diagnostics.js';
 import {PROMPT_KEY,fingerprint} from './core.js';
 import {automaticMemory} from './placement.js';
 import {TOKENIZER_NAMES,validateCounter} from './compression.js';
+import {responseFinish} from './generation.js';
 
 export const LITERAL_PROMPT=Symbol.for('pensieve-literal-prompt');
 
@@ -82,14 +83,26 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             if(!ownGeneration)return;cancelCurrent?.(reason);
             try{context().stopGeneration();}catch(error){diagnostics.report(tagError(error,{code:'INT-004',stage:'unlock',reason:'release'}));try{context().eventSource.emit(context().eventTypes.GENERATION_STOPPED);}catch{}}
         },
-        async generate(prompt,source,{responseLength}={}) {
+        async generate(prompt,source,{responseLength,onRequest=()=>{}}={}) {
             const c=context(),api=c.mainApi;
             if(!['openai','textgenerationwebui','kobold','koboldhorde','novel'].includes(api))throw tagError(Error('Это подключение не поддерживает проверенную отдельную генерацию. Используйте Chat Completion или Text Completion.'),{code:'GEN-001',stage:'api',reason:'unsupported-api'});
             // ST createRawPrompt substitutes macros, even in structured messages. A nonce-bearing
             // raw request lets us restore the user's exact prompt and source after that formatting.
             const nonce=`PENSIEVE_LITERAL_${c.uuidv4()}`;
             const event=api==='openai'?c.eventTypes.CHAT_COMPLETION_PROMPT_READY:c.eventTypes.GENERATE_AFTER_COMBINE_PROMPTS;
-            let applied=false;const nativeCancel=()=>cancelCurrent?.('cancel-unknown');
+            const settingsEvent=api==='openai'?c.eventTypes.CHAT_COMPLETION_SETTINGS_READY:c.eventTypes.TEXT_COMPLETION_SETTINGS_READY;
+            let applied=false,request={stream:'non-streaming'};
+            const nativeCancel=()=>cancelCurrent?.('cancel-unknown');
+            const observe=payload=>{
+                const ours=api==='openai'?payload.messages?.some(m=>m[LITERAL_PROMPT]===true)
+                    :payload.prompt===prompt+'\n\n'+source;
+                if(!applied||!ours)return;
+                const stops=payload.stop??payload.stopping_strings??payload.stop_sequence;
+                request={actualOutput:payload.max_completion_tokens??payload.max_new_tokens??payload.max_tokens??payload.max_length,
+                    stopCount:Array.isArray(stops)?stops.length:typeof stops==='string'&&stops.length?1:0,
+                    stream:payload.stream===true?'unexpected-stream':'non-streaming'};
+                onRequest(request);
+            };
             const literal=payload=>{
                 if(api==='openai') {
                     if(!payload.chat?.some(m=>typeof m.content==='string'&&m.content.includes(nonce)))return;
@@ -101,19 +114,31 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
                 applied=true;
             };
             c.eventSource.on(event,literal);
+            if(settingsEvent)c.eventSource.on(settingsEvent,observe);
             try {
+                onRequest(request);
                 let cancel;const stopped=new Promise((_,reject)=>cancel=(reason='cancel-user')=>reject(tagError(Object.assign(Error('Генерация отменена.'),{name:'AbortError'}),{code:'GEN-006',stage:'api',reason:['chat-changed','cancel-unknown'].includes(reason)?reason:'cancel-user',snapshot:{macroUsed:false,generation:'canceled'}})));cancelCurrent=cancel;
                 c.eventSource.on(c.eventTypes.GENERATION_STOPPED,nativeCancel);
                 const data=await trace({code:'GEN-001',stage:'api',snapshot:{macroUsed:false,generation:'running'}},()=>Promise.race([c.generateRawData({api,prompt:[{role:'user',content:nonce}],systemPrompt:'',instructOverride:true,quietToLoud:true,responseLength}),stopped]));
                 if(!applied)throw tagError(Error('SillyTavern не применил буквальный пользовательский промпт. Генерация не сохранена.'),{code:'GEN-005',stage:'response',reason:'literal-hook'});
-                const reason=data?.choices?.[0]?.finish_reason??data?.stop_reason??data?.candidates?.[0]?.finishReason;
-                const interrupted=data?.incomplete_details!=null||data?.status==='incomplete'||['error','cancelled','canceled','interrupted'].includes(reason);
-                const truncated=interrupted||['length','max_tokens','MAX_TOKENS','max_output_tokens'].includes(reason);
-                if(['content_filter','safety','SAFETY','refusal'].includes(reason))throw tagError(Error('Модель остановила ответ фильтром. Исходники не изменены.'),{code:'GEN-008',stage:'response',reason:'refused'});
-                const text=trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));
-                if(truncated&&(typeof text!=='string'||!text.trim()))throw tagError(Error('Ответ модели был обрезан до появления текста.'),{code:'GEN-007',stage:'response',reason:'truncated'});
-                return {text,truncated,interrupted};
-            } finally {cancelCurrent=null;c.eventSource.removeListener(c.eventTypes.GENERATION_STOPPED,nativeCancel);c.eventSource.removeListener(event,literal);}
+                const finish=responseFinish(data);
+                const interrupted=['interrupted','stop-sequence'].includes(finish);
+                const truncated=finish==='length'||interrupted;
+                const usage=data?.usage??data?.usageMetadata;
+                const received=usage?.completion_tokens??usage?.output_tokens??usage?.candidatesTokenCount??data?.tokens_predicted;
+                const reportedInput=usage?.prompt_tokens??usage?.input_tokens??usage?.promptTokenCount;
+                onRequest({...request,finish,received,reportedInput});
+                if(finish==='filtered')throw tagError(Error('Модель остановила ответ фильтром. Исходники не изменены.'),{code:'GEN-008',stage:'response',reason:'refused'});
+                const emptyTruncation=()=>tagError(Error('Ответ модели был обрезан до появления текста.'),{code:'GEN-007',stage:'response',reason:'truncated'});
+                let text;
+                try{text=trace({code:'GEN-005',stage:'response'},()=>core.extractMessageFromData(data,api));}
+                catch(error){if(truncated)throw emptyTruncation();throw error;}
+                if(truncated&&(typeof text!=='string'||!text.trim()))throw emptyTruncation();
+                return {text,truncated,interrupted,finish,received,reportedInput,stream:request.stream};
+            } finally {
+                cancelCurrent=null;c.eventSource.removeListener(c.eventTypes.GENERATION_STOPPED,nativeCancel);c.eventSource.removeListener(event,literal);
+                if(settingsEvent)c.eventSource.removeListener(settingsEvent,observe);
+            }
         },
         save:()=>trace({stage:'save'},()=>context().saveMetadata()),
         async saveSettings(expected) {
@@ -132,6 +157,19 @@ export function createHost(context,core,chats,fetcher=globalThis.fetch,diagnosti
             const file=await response.json();
             if(!Array.isArray(file)||!file[0]?.chat_metadata)throw tagError(Error('Сервер вернул неожиданный формат чата. Сообщения не исключены.'),{code:'DATA-006',stage:'read',reason:'invalid-data'});
             return {metadata:file[0].chat_metadata,messages:file.slice(1)};
+        },
+        normaliseSavedChat(messages){
+            const copy=structuredClone(messages);
+            for(const message of copy){
+                core.ensureMessageMediaIsArray?.(message);
+                if(!core.ensureSwipes?.(message))continue;
+                // Rendering initializes the selected swipe and copies the message metadata into it.
+                const index=message.swipe_id,swipe=message.swipe_info?.[index];
+                if(!swipe||typeof message.swipes?.[index]!=='string')continue;
+                if(copy.length>1||context().chatMetadata?.tainted)message.swipes[index]=message.mes;
+                Object.assign(swipe,{send_date:message.send_date,gen_started:message.gen_started,gen_finished:message.gen_finished,extra:structuredClone(message.extra)});
+            }
+            return copy;
         },
         hide:(start,end,unhide)=>chats.hideChatMessageRange(start,end,unhide),
         setDeliveryFormatter(formatter){deliveryFormatter=formatter;},

@@ -2,7 +2,7 @@ import {guardAction,setErrorSink} from './diagnostics-view.js';
 import {describeError,tagError,trace,errorMeta} from './diagnostics.js';
 import {VERSION as UI_VERSION} from './version.js';
 import {presetList,selectPreset,createPreset,renamePreset,deletePreset,restoreBuiltin,exportPreset,importPreset,mergePromptGroups} from './prompt-presets.js';
-import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint,hasDetachedSources} from './core.js';
+import {KEY,defaults,clone,bytes,WARN_ARCHIVE_BYTES,exportArchive,chronological,captureRange,findOverlaps,inspectSources,fingerprint,matchesSourceFingerprint,hasDetachedSources} from './core.js';
 import {memoryViewState,filterArchive,entryDisplayTitle} from './view-state.js';
 import {LEVELS,childrenIds,hierarchyIndex,entryNumber,relationLabel} from './hierarchy.js';
 import {createBackup,parseBackup,planRestore} from './backup.js';
@@ -153,9 +153,9 @@ export class UI {
             let found=[];
             if(saved.id)found=chat.map((m,i)=>m.extra?.[KEY]?.id===saved.id?i:-1).filter(i=>i>=0);
             else if(saved.ref)found=chat.includes(saved.ref)?[chat.indexOf(saved.ref)]:[];
-            else found=chat.map((m,i)=>fingerprint(m)===saved.hash?i:-1).filter(i=>i>=0);
+            else found=chat.map((m,i)=>matchesSourceFingerprint(m,saved.hash)?i:-1).filter(i=>i>=0);
             const index=found.length===1?found[0]:null;
-            if(index===null||fingerprint(chat[index])!==saved.hash){this.rangeEdges[edge]=null;this[edge]=null;this.rangeWarning='Выбранная граница изменена, удалена или неоднозначна. Укажите её заново.';}
+            if(index===null||!matchesSourceFingerprint(chat[index],saved.hash)){this.rangeEdges[edge]=null;this[edge]=null;this.rangeWarning='Выбранная граница изменена, удалена или неоднозначна. Укажите её заново.';}
             else{saved.index=index;saved.ref=chat[index];this[edge]=index;}
         }
         this.persistRange();
@@ -169,7 +169,7 @@ export class UI {
             if(!Number.isInteger(this.start)||!Number.isInteger(this.end)||this.start>this.end){this.e.host.notify('warning','Отметьте начало и конец главы в правильном порядке.');return;}
             const archive=this.e.archive(session),range=captureRange(session.chat,this.start,this.end),overlaps=findOverlaps(archive.entries,range);
             const slots=this.e.chapterSlotsForRange(archive,range,session.chat);
-            const options=overlaps.length||slots.length?await this.chooseChapterRange(range,archive,overlaps,slots):{};
+            const options=overlaps.length||slots.some(slot=>slot.ambiguous)?await this.chooseChapterRange(range,archive,overlaps,slots):{};
             if(!options)return;this.e.assert(session);
             const end=this.end,node=[...document.querySelectorAll('#chat .mes[mesid]')].find(n=>Number(n.getAttribute('mesid'))===end);
             progress=el('div',{class:'pv-chat-progress',role:'status'},'Создаётся глава…');(node?.querySelector('.mes_block')??node)?.append(progress);this.decorateMessages();
@@ -182,13 +182,13 @@ export class UI {
             let choice=null;
             const decide=value=>{choice=value;dialog.close();};
             if(overlaps.length)body.append(el('p',{},'Выбранные сообщения уже входят в главы: '+overlaps.map(entry=>entryDisplayTitle(entry,archive.entries)).join(', ')+'.'));
-            if(slots.length)body.append(el('p',{},'Этот диапазон совпадает с исходниками удалённой главы. Можно создать новую сводку под прежним номером.'));
+            if(slots.length)body.append(el('p',{},'Для выбранного диапазона найден прежний номер. Его можно использовать для воссоздания главы.'));
             if(slots.some(slot=>slot.ambiguous))body.append(el('p',{class:'pv-warning'},'По соседним главам не удалось однозначно подтвердить хронологический номер. Проверьте его перед сохранением.'));
             const actions=row();
             for(const {number} of slots)actions.append(button(`Воссоздать главу №${number}`,()=>decide({allowOverlap:!!overlaps.length,restoreNumber:number}),true));
-            actions.append(button(overlaps.length?'Создать отдельную версию':'Создать с новым номером',()=>decide({allowOverlap:!!overlaps.length}),!slots.length));
+            if(!slots.some(slot=>!slot.ambiguous))actions.append(button(overlaps.length?'Создать отдельную версию':'Создать с новым номером',()=>decide({allowOverlap:!!overlaps.length,newChapterNumber:true}),!slots.length));
             for(const entry of overlaps){
-                if(hasDetachedSources(entry)||entry.sources.length!==range.length||!entry.sources.every((source,i)=>source.id===range[i].id&&source.hash===range[i].hash))continue;
+                if(hasDetachedSources(entry)||entry.sources.length!==range.length||!entry.sources.every((source,i)=>source.id===range[i].id&&matchesSourceFingerprint(range[i].ref,source.hash)))continue;
                 actions.append(button('Заменить '+entryDisplayTitle(entry,archive.entries),()=>decide({allowOverlap:true,replaceId:entry.id,replaceVersion:entry.version})));
             }
             actions.append(button('Снять отметки',()=>{this.clearRange();this.decorateMessages();decide(null);}),button('Отмена',()=>decide(null)));
@@ -873,23 +873,40 @@ export class UI {
         const title=el('input',{value:draft.title,'aria-label':'Название воспоминания'}),text=el('textarea',{'aria-label':'Текст воспоминания'},draft.text);
         body.append(field('Название',title),field('Текст — можно отредактировать перед сохранением',text));
         const warning=el('p',{class:'pv-warning',role:'status'});
-        const updateWarning=()=>{warning.textContent=[draft.interrupted?'Генерация прервана. Полученный текст может быть неполным.':draft.truncated?'Ответ модели был обрезан. Проверьте текст перед сохранением.':'',draft.reasoningAmbiguous?'В ответе есть неоднозначная разметка рассуждений. Проверьте её и при необходимости отредактируйте текст.':''].filter(Boolean).join(' ');warning.hidden=!warning.textContent;};
-        updateWarning();body.prepend(warning);
-        const notice=el('p',{role:'status'});body.append(notice);let saving=false,finished=false;
+        const notice=el('p',{role:'status'});body.prepend(warning);body.append(notice);let saving=false,generating=false,finished=false;
         const owned=()=>this.generationView?.job?.draft===draft?this.generationView.job:null;const previewJob=owned();if(previewJob)previewJob.previewStatus=notice;
         const finish=()=>{if(finished)return;finished=true;dialog.remove();if(this.editor===dialog)this.editor=null;resolve(dialog.savedEntry??null);};
         const minimize=button('−',()=>{const job=owned();if(job)this.generationView.minimize(job);});minimize.className='pv-icon';minimize.setAttribute('aria-label','Свернуть окно воспоминания');dialog.querySelector('.pv-header button').before(minimize);
-        const save=button(replacement?'Заменить сводку':draft.restoreNumber!=null?`Сохранить главу №${draft.restoreNumber}`:'Сохранить',async()=>{
-            if(saving)return;
-            saving=true;save.disabled=true;regen.disabled=true;const job=owned();if(job){job.previewError='';job.previewSaving=true;this.generationView.paint(job);}
+        const update=()=>{
+            const reason={length:'Модель достигла выходного лимита.',timeout:'Сервер не ответил вовремя.',error:'Запрос не завершился.',interrupted:'Модель или подключение прервали ответ.','stop-sequence':'Модель остановилась на стоп-последовательности.'}[draft.finish];
+            warning.textContent=[draft.truncated?(reason??'Ответ неполный.')+' Полученный текст сохранён в черновике. Можно продолжить или начать заново.':'',draft.reasoningAmbiguous?'Проверьте разметку рассуждений в ответе.':''].filter(Boolean).join(' ');
+            warning.hidden=!warning.textContent;
+            save.textContent=draft.commitId?'Повторить проверку сохранения':draft.truncated?(replacement?'Заменить неполной сводкой':'Сохранить неполный текст'):replacement?'Заменить сводку':draft.restoreNumber!=null?`Сохранить главу №${draft.restoreNumber}`:'Сохранить';
+            save.disabled=saving||generating;regen.disabled=saving||generating||!!draft.commitId;
+            more.hidden=!draft.truncated||!draft.generationBatch;more.disabled=regen.disabled;
+        };
+        const save=button('Сохранить',async()=>{
+            if(saving||generating)return;
+            saving=true;update();const job=owned();if(job){job.previewError='';job.previewSaving=true;this.generationView.paint(job);}
             try{const saved=await this.e.saveDraft(draft,{title:title.value,text:text.value});await this.episodeSaved(draft);dialog.savedEntry=saved;if(dialog.open)dialog.close();else finish();this.postSaveRefresh();this.showNotice('Воспоминание сохранено.');}
             catch(error){notice.textContent=this.issue(error,{severity:'error'});if(job)job.previewError=notice.textContent;}
-            finally{saving=false;save.disabled=false;if(draft.commitId&&!finished)save.textContent='Повторить проверку сохранения';regen.disabled=!!draft.commitId;if(job){job.previewSaving=false;this.generationView.paint(job);}}
+            finally{saving=false;update();if(job){job.previewSaving=false;this.generationView.paint(job);}}
         },true);
-        const regen=button('Повторить генерацию',async()=>{save.disabled=true;regen.disabled=true;try{if(await this.confirmPromptDrafts([draft.type],'повторной генерацией')){await this.e.regenerate(draft);text.value=draft.text;updateWarning();}}catch(error){notice.textContent=this.issue(error,{severity:'error'});}finally{save.disabled=false;regen.disabled=false;}});
-        const actions=row(save,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(!saving)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(this.e.busy)this.e.cancel();dialog.close();}));
+        const generate=async continuation=>{
+            if(saving||generating||draft.commitId)return;
+            generating=true;update();notice.textContent=continuation?'Продолжаю сводку…':'Повторяю генерацию…';
+            try{
+                if(!await this.confirmPromptDrafts([draft.type],continuation?'продолжением':'повторной генерацией')||finished)return;
+                if(continuation)await this.e.continueDraft(draft,text.value);else await this.e.regenerate(draft);
+                if(!finished)text.value=draft.text;
+                notice.textContent='';
+            }catch(error){notice.textContent=this.issue(error,{severity:'error'});}
+            finally{generating=false;update();}
+        };
+        const regen=button('Повторить генерацию',()=>generate(false)),more=button('Продолжить генерацию',()=>generate(true));
+        const actions=row(save,more,regen,button('Скопировать',()=>this.act(()=>copy(text.value))),button('Отменить генерацию',()=>{if(generating)this.e.cancel();}),button('Отмена',()=>{if(saving){minimize.click();return;}if(generating)this.e.cancel();dialog.close();}));
         if(replacement||draft.restoreNumber!=null)actions.append(this.chapterBackupButton(draft.session));
-        body.append(actions);
+        body.append(actions);update();
         dialog.oncancel=event=>{if(saving){event.preventDefault();minimize.click();}else if(this.e.busy)this.e.cancel();};dialog.onclose=()=>{if(dialog.pensieveMinimizeClosures){dialog.pensieveMinimizeClosures--;return;}finish();};dialog.showModal();
         });
     }

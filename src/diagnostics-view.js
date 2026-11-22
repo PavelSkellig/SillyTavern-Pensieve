@@ -62,5 +62,11 @@ export class DiagnosticsView {
         for(const e of entries.slice().reverse()){
             const item=node('details',{class:'pv-diag-entry','data-error-code':e.code}),s=node('summary',{},`${new Date(e.lastTime).toLocaleString('ru-RU')} · ${e.code}`),copyStatus=node('p',{'role':'status'}),content=node('div');content.append(...this.details(e),button('Копировать диагностику',()=>this.copy(this.service.reportText([e]),copyStatus,content)),copyStatus);item.append(s,content);journal.append(item);
         }
+        const generation=this.service.generationText();
+        if(generation){
+            const details=node('details',{class:'pv-diag-entry'});
+            details.append(node('summary',{},'Последние запросы генерации'),node('pre',{},generation));
+            b.append(details);
+        }
     }
 }

@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {createHost} from '../src/host.js';
 function setup(api='openai') {
- const eventSource=new EventEmitter(),c={mainApi:api,chatId:'story',characterId:0,groupId:null,characters:[{name:'Test',avatar:'test.png'}],extensionSettings:{},uuidv4:()=> 'nonce',eventSource,eventTypes:{CHAT_COMPLETION_PROMPT_READY:'cc',GENERATE_AFTER_COMBINE_PROMPTS:'tc'},getRequestHeaders:()=>({'Content-Type':'application/json'})};
+ const eventSource=new EventEmitter(),c={mainApi:api,chatId:'story',characterId:0,groupId:null,characters:[{name:'Test',avatar:'test.png'}],extensionSettings:{},uuidv4:()=> 'nonce',eventSource,eventTypes:{CHAT_COMPLETION_PROMPT_READY:'cc',CHAT_COMPLETION_SETTINGS_READY:'cc-settings',GENERATE_AFTER_COMBINE_PROMPTS:'tc',GENERATION_STOPPED:'stop'},getRequestHeaders:()=>({'Content-Type':'application/json'})};
  let payload;
  c.generateRawData=async options=>{payload=api==='openai'?{chat:options.prompt}:{prompt:options.prompt[0].content};eventSource.emit(api==='openai'?'cc':'tc',payload);return {choices:[{message:{content:'raw {{char}}'}}]}};
  const core={extractMessageFromData:d=>d.choices[0].message.content};
  return {c,host:createHost(()=>c,core,{}),get payload(){return payload}};
 }
 test('raw chat request preserves user prompt, literal macros and only selected input',async()=>{
- const f=setup();assert.equal(await f.host.generate('Точное {{char}}','Имя:\n{{user}}'),'raw {{char}}');
+ const f=setup();assert.equal((await f.host.generate('Точное {{char}}','Имя:\n{{user}}')).text,'raw {{char}}');
  assert.deepEqual(JSON.parse(JSON.stringify(f.payload.chat)),[{role:'system',content:'Точное {{char}}'},{role:'user',content:'Имя:\n{{user}}'}]);assert.equal(f.c.eventSource.listenerCount('cc'),0);
 });
 test('text completion preserves literal source and prompt',async()=>{
@@ -24,6 +24,20 @@ test('nonce guard never modifies another extension request',async()=>{
 test('truncated output is rejected; listeners are removed on error',async()=>{
  const f=setup();f.c.generateRawData=async o=>{f.c.eventSource.emit('cc',{chat:o.prompt});return {choices:[{finish_reason:'length'}]}};
  await assert.rejects(()=>f.host.generate('p','s'),/обрезан/);assert.equal(f.c.eventSource.listenerCount('cc'),0);
+});
+test('native settings and final provider response expose safe metrics and the complete received fragment',async()=>{
+ const f=setup();let observed;
+ f.c.generateRawData=async options=>{
+   const prompt={chat:options.prompt};
+   f.c.eventSource.emit('cc',prompt);
+   f.c.eventSource.emit('cc-settings',{messages:prompt.chat,max_tokens:options.responseLength,stream:false,stop:['private stop string']});
+   return {choices:[{finish_reason:'length',message:{content:'beginning\nlast fragment'}}],usage:{prompt_tokens:900,completion_tokens:4200}};
+ };
+ const result=await f.host.generate('system','private roleplay',{responseLength:4200,onRequest:value=>observed=value});
+ assert.equal(result.text,'beginning\nlast fragment');
+ assert.equal(result.truncated,true);
+ assert.deepEqual(observed,{actualOutput:4200,stopCount:1,stream:'non-streaming',finish:'length',received:4200,reportedInput:900});
+ assert.equal(f.c.eventSource.listenerCount('cc-settings'),0);
 });
 test('group readback uses group chat ID and metadata header',async()=>{
  const f=setup();f.c.groupId='g';let request;

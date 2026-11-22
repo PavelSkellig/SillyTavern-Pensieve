@@ -1,14 +1,44 @@
 import {VERSION} from './version.js';
 import {fingerprint} from './core.js';
 import {ERRORS,STAGES,OPERATIONS,REASONS,STATIC_MESSAGES} from './diagnostic-catalog.js';
+import {FINISH_REASONS} from './generation.js';
 const knownMessages=new Map(Object.entries(STATIC_MESSAGES).map(([id,text])=>[text,id]));
 const tags=new WeakMap(),classes=new Set(['Error','TypeError','SyntaxError','RangeError','ReferenceError','TimeoutError','AbortError','AggregateError']);
-const files=new Set(['index.js','engine.js','host.js','core.js','ui.js','memory-echo.js','prompt-envelope.js','placement.js','source-links.js','order.js','hierarchy.js','backup.js','prompt-presets.js','builtin-prompts.js','generation-view.js','diagnostics.js','diagnostic-catalog.js','diagnostics-view.js','version.js','compression.js','script.js','openai.js','macros.js','macro-system.js','eventemitter.js']);
+const files=new Set(['index.js','engine.js','host.js','core.js','ui.js','memory-echo.js','prompt-envelope.js','placement.js','source-links.js','order.js','hierarchy.js','backup.js','prompt-presets.js','builtin-prompts.js','generation.js','generation-view.js','diagnostics.js','diagnostic-catalog.js','diagnostics-view.js','version.js','compression.js','script.js','openai.js','macros.js','macro-system.js','eventemitter.js']);
 const apiCodes=new Set(['context_length_exceeded','max_tokens_exceeded','token_limit_exceeded','invalid_api_key','authentication_error','insufficient_quota','rate_limit_exceeded','rate_limit_error','request_timeout','timeout']);
 const severities=new Set(['error','warning','info']),statuses=new Set(['error','blocked','canceled','warning']),generationStates=new Set(['idle','running','saving','canceled','error','unknown']);
 const read=(o,k)=>{try{return o?.[k];}catch{return undefined;}};
 const version=value=>typeof value==='string'?value.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\b/)?.[0]??null:null;
 const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=1e7?value:null;
+const generationKinds={create:'создание',regenerate:'перегенерация',continue:'продолжение'};
+const saveResults={draft:'черновик',saved:'подтверждено',waiting:'ожидает проверки',error:'ошибка',canceled:'отменено'};
+const generationLevels={summary:'Глава',arc:'Часть',volume:'Том'};
+const privateReference=value=>typeof value!=='string'||!value?null:/^(?:ref-[a-f0-9]{16}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(value)
+    ?value:'ref-'+fingerprint({name:'generation-reference',mes:value.slice(0,200)}).slice(0,16);
+function validGeneration(value){
+    if(!value||!Object.hasOwn(generationKinds,value.kind)||!Object.hasOwn(generationLevels,value.level))return null;
+    const id=privateReference(value.id),time=value.time;
+    if(!id||!Number.isSafeInteger(time)||time<0||time>8640000000000000)return null;
+    const numbers=Object.fromEntries(['number','sourceCount','segment','segments','context','configuredOutput','input','reportedInput','requestedOutput','actualOutput','received','stopCount'].map(key=>[key,count(value[key])]));
+    return {id,time,kind:value.kind,level:value.level,target:privateReference(value.target),...numbers,
+        finish:FINISH_REASONS.has(value.finish)?value.finish:'unknown',
+        stream:['non-streaming','unexpected-stream'].includes(value.stream)?value.stream:'unknown',
+        save:Object.hasOwn(saveResults,value.save)?value.save:'draft'};
+}
+function generationReport(entries){
+    return entries.map(value=>{
+        const e=validGeneration(value);if(!e)return '';
+        const number=v=>v??'—';
+        return [
+            `${new Date(e.time).toISOString()} · ${generationKinds[e.kind]} · ${generationLevels[e.level]} №${number(e.number)}`,
+            `ID операции: ${e.id} · ID записи: ${number(e.target)}`,
+            `Источников: ${number(e.sourceCount)} · Фрагмент: ${number(e.segment)}/${number(e.segments)}`,
+            `Токены: вход ≈${number(e.input)} · вход по API ${number(e.reportedInput)} · контекст ${number(e.context)}`,
+            `Выход: настройка ${number(e.configuredOutput)} · запрошено ${number(e.requestedOutput)} · параметры SillyTavern ${number(e.actualOutput)} · получено по API ${number(e.received)}`,
+            `Завершение: ${e.finish} · Режим потока: ${e.stream} · Стоп-последовательностей: ${number(e.stopCount)} · Сохранение: ${saveResults[e.save]}`,
+        ].join('\n');
+    }).filter(Boolean).join('\n\n');
+}
 const objectError=error=>error&&(typeof error==='object'||typeof error==='function')?error:Error('Ошибка без объекта исключения');
 const enumValue=(map,value,fallback)=>Object.hasOwn(map,value)?value:fallback;
 const recoveryKinds={none:'Незавершённой операции нет',hide:'Сохранение главы и исключение исходников',commit:'Сохранение воспоминания',restore:'Возврат исходников',backup:'Восстановление резервной копии'};
@@ -83,12 +113,29 @@ export class Diagnostics {
     }
     scopeKey(){let scope='local';try{const value=this.getScope();if(typeof value==='string')scope=value.slice(0,2000);}catch{}return 'pensieve.diagnostics.v1:'+fingerprint({name:'scope',mes:scope});}
     load(fresh=false){
-        const key=this.scopeKey();if(key===this.key&&(!fresh||!this.persistent))return;this.key=key;this.records=[];
+        const key=this.scopeKey();if(key===this.key&&(!fresh||!this.persistent))return;this.key=key;this.records=[];this.generations=[];
         if(!this.persistent)return;
-        let raw;try{raw=this.storage.getItem(key);}catch{this.persistent=false;return;}if(!raw)return;try{if(raw.length>128*1024)throw Error();const value=JSON.parse(raw);if(value.version!==1||!Array.isArray(value.entries))throw Error();this.records=value.entries.slice(-20).map(validEntry).filter(Boolean);this.corrupt=false;}catch{this.corrupt=true;}
+        let raw;try{raw=this.storage.getItem(key);}catch{this.persistent=false;return;}if(!raw)return;try{if(raw.length>128*1024)throw Error();const value=JSON.parse(raw);if(value.version!==1||!Array.isArray(value.entries))throw Error();this.records=value.entries.slice(-20).map(validEntry).filter(Boolean);this.generations=Array.isArray(value.generations)?value.generations.slice(-20).map(validGeneration).filter(Boolean):[];this.corrupt=false;}catch{this.corrupt=true;}
     }
-    persist(){if(!this.persistent)return;try{this.storage.setItem(this.key,JSON.stringify({version:1,entries:this.records}));}catch{this.persistent=false;}}
+    persist(){if(!this.persistent)return;try{this.storage.setItem(this.key,JSON.stringify({version:1,entries:this.records,generations:this.generations}));}catch{this.persistent=false;}}
     get entries(){this.load(true);return structuredClone(this.records);}
+    recordGeneration(value){
+        try{
+            this.load(true);const entry=validGeneration({...value,time:this.now()});
+            if(entry){this.generations.push(entry);this.generations=this.generations.slice(-20);this.persist();this.emit(null,false);}
+        }catch{}
+    }
+    markGeneration(id,save,target=null){
+        if((!id&&!target)||!Object.hasOwn(saveResults,save))return;
+        try{
+            this.load(true);const ref=privateReference(id),targetRef=privateReference(target);let changed=false;
+            for(const entry of this.generations)if(ref?entry.id===ref:entry.target===targetRef&&entry.save==='waiting'){
+                entry.save=save;entry.target=targetRef??entry.target;changed=true;
+            }
+            if(changed){this.persist();this.emit(null,false);}
+        }catch{}
+    }
+    generationText(){this.load(true);return generationReport(this.generations);}
     subscribe(listener){this.listeners.add(listener);return()=>this.listeners.delete(listener);}
     emit(entry,notify){
         if(this.emitting)return;this.emitting=true;
@@ -110,8 +157,11 @@ export class Diagnostics {
             this.emit(entry,meta.notify!==false);return structuredClone(entry);
         }catch{return null;}
     }
-    reportText(entries=this.entries){return formatDiagnosticReport(entries);}
-    clear(){this.load(true);this.records=[];this.persist();this.emit(null,false);}
+    reportText(entries){
+        const report=formatDiagnosticReport(entries??this.entries),generation=this.generationText();
+        return generation&&(!entries||entries.some(entry=>['api','response','save'].includes(entry.stage)))?report+'\n\nПоследние запросы генерации\n'+generation:report;
+    }
+    clear(){this.load(true);this.records=[];this.generations=[];this.persist();this.emit(null,false);}
 }
 
 export function diagnosticSnapshot(context,engine=null,core={}) {

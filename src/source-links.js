@@ -1,4 +1,4 @@
-import {KEY,fingerprint,hasDetachedSources,memoryEntries} from './core.js';
+import {KEY,fingerprint,matchesSourceFingerprint,hasDetachedSources,memoryEntries} from './core.js';
 import {hierarchyIndex,LEVELS,entryNumber} from './hierarchy.js';
 
 // Original source identity is checked against live, unformatted messages, never prompt indices.
@@ -12,7 +12,7 @@ function localEpisodes(entries,chat,key) {
         for(const source of entry.sources){
             const message=messages.get(source.id);if(!message)continue;
             if(!hashes.has(message))hashes.set(message,fingerprint(message));
-            if(hashes.get(message)===source.hash)matches.push(source.id);
+            if(matchesSourceFingerprint(message,source.hash,hashes.get(message)))matches.push(source.id);
         }
         episodes.set(entry.id,{entry,matches,complete:matches.length===entry.sources.length});
     }

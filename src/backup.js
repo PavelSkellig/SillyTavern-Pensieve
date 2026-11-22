@@ -1,4 +1,4 @@
-import {clone,bytes,validateArchive,MAX_ARCHIVE_BYTES,fingerprint,inspectSources,memoryEntries,hasDetachedSources} from './core.js';
+import {clone,bytes,validateArchive,MAX_ARCHIVE_BYTES,fingerprint,inspectSources,memoryEntries,hasDetachedSources,resolveImportedChapterNumbers} from './core.js';
 import {childrenIds,hierarchyIndex} from './hierarchy.js';
 
 const ownObject=value=>value&&typeof value==='object'&&!Array.isArray(value);
@@ -63,12 +63,13 @@ export function planRestore(current,backup,{targetKey,mode='merge',activate=fals
         const copy={...clone(entry),id,origin:clone(origin),sourceChat,detachedSources:foreign,backupActive:entry.backupActive??entry.active,active:false,imported:true};if(foreign)detached++;add.push(copy);byOrigin.set(key,copy);matched.push([copy,entry]);
     }
     for(const entry of add){const original=incoming.entries.find(e=>map.get(e.id)===entry.id);entry.summaryIds=original.summaryIds.map(id=>map.get(id));if(entry.type==='volume')entry.chapterIds=original.chapterIds.map(id=>map.get(id));}
-    archive.entries.push(...add);archive.pending=null;
     if(backup.source.key===targetKey&&incoming.chapterSlots){
         const chapterSlots=new Map((mode==='merge'?current.chapterSlots??[]:[]).map(slot=>[slot.number,slot]));
         for(const slot of incoming.chapterSlots)if(!chapterSlots.has(slot.number))chapterSlots.set(slot.number,slot);
         archive.chapterSlots=[...chapterSlots.values()];
     }
+    resolveImportedChapterNumbers(archive.entries,add,archive.chapterSlots);
+    archive.entries.push(...add);archive.pending=null;
     if(activate){if(backup.source.hadPendingOperation)throw Error('Копия содержит незавершённую операцию. Сначала восстановите записи без активности.');const roots=new Set(memoryEntries(incoming.entries).map(e=>e.id));for(const [target,source]of matched)if(roots.has(source.id))target.active=true;const index=hierarchyIndex(archive.entries);for(const parent of archive.entries.filter(e=>e.active))for(const id of index.descendants(parent)){const child=index.byId.get(id);if(child)child.active=false;}}
     validateArchive(archive);return {archive,added:add.length,skipped,conflicts,detached,map};
 }
