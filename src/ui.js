@@ -9,7 +9,7 @@ import {createBackup,parseBackup,planRestore} from './backup.js';
 import {bounded} from './save-recovery.js';
 import {GenerationView,operationLabel} from './generation-view.js';
 import {validateCompression,compressionValues} from './compression.js';
-import {contentsRanges,messageLabels} from './source-links.js';
+import {contentsRanges,contentsTree,messageLabels} from './source-links.js';
 import {OMISSION_KINDS} from './coverage.js';
 import {PANEL_THEMES,panelTheme} from './themes.js';
 
@@ -338,6 +338,7 @@ export class UI {
             preview:!!this.content.querySelector('.pv-preview-details[open]'),help:!!this.content.querySelector('.pv-archive-help[open]'),
             openEntries:[...this.content.querySelectorAll('[data-entry-id] .pv-entry-more[open]')].map(n=>n.closest('[data-entry-id]').dataset.entryId),
             openTree:[...this.content.querySelectorAll('[data-parent-entry][open]')].map(n=>n.dataset.parentEntry),maintenance:!!this.content.querySelector('.pv-maintenance[open]'),
+            openContents:[...this.content.querySelectorAll('[data-contents-branch][aria-expanded="true"]')].map(node=>node.dataset.contentsBranch),
         });
     }
     restoreView() {
@@ -425,30 +426,55 @@ export class UI {
     home(archive,session) {
         const home=el('div',{class:'pv-home'}),state=el('section',{class:'pv-home-state'}),counts=el('div',{class:'pv-home-counts'});
         const quick=el('section',{class:'pv-home-quick'}),actions=el('div',{class:'pv-home-actions'});
-        const contents=el('section',{class:'pv-home-contents'}),list=el('div',{class:'pv-contents-list'});
+        const contents=el('section',{class:'pv-home-contents'});
         const entries=archive.entries.filter(entry=>entry.id!==archive.pending?.entryId);
-        const ranges=contentsRanges(entries,session.chat,session.key);
         for(const [type,level] of Object.entries(LEVELS)){
-            const records=entries.filter(entry=>entry.type===type),card=el('div',{class:'pv-count-card','data-count':type});
-            card.append(outlineIcon(LEVEL_ICONS[type]),el('span',{},level.plural),el('strong',{},records.length.toLocaleString('ru-RU')));
+            const count=entries.filter(entry=>entry.type===type).length,card=el('div',{class:'pv-count-card','data-count':type});
+            card.append(outlineIcon(LEVEL_ICONS[type]),el('span',{},level.plural),el('strong',{},count.toLocaleString('ru-RU')));
             counts.append(card);
-            const latest=records.sort((a,b)=>Number(entryNumber(b,entries))-Number(entryNumber(a,entries)))[0];
-            if(!latest)continue;
-            const range=ranges.get(latest.id),title=entryDisplayTitle(latest,archive.entries);
-            const location=range?(range.start===range.end?`сообщение ${range.start}`:`сообщения ${range.start}–${range.end}`):'диапазон недоступен';
-            const item=button('',()=>this.editEntry(latest,false)),label=el('span',{class:'pv-contents-label'});
-            item.classList.add('pv-contents-row');item.dataset.contentsEntry=latest.id;
-            label.append(el('strong',{},title),el('span',{},' — '+location));
-            item.append(outlineIcon(LEVEL_ICONS[type]),label,outlineIcon('chevron','pv-contents-chevron'));
-            list.append(item);
         }
         for(const [type,title,icon] of [['summary','Создать часть','document'],['arc','Создать том','volume']]){
             const tile=button('',()=>{this.archiveTab=type;this.archiveFilter='all';this.archiveSearch='';this.go('archive',true);});
             tile.classList.add('pv-creation-card');tile.append(outlineIcon(icon),el('span',{},title));actions.append(tile);
         }
         state.append(el('h3',{},'Состояние памяти'),counts);quick.append(el('h3',{},'Быстрые действия'),actions);
+        contents.append(el('h3',{},'Содержание'),this.contentsList(entries,archive.entries,session));
+        home.append(state,quick,contents);this.content.append(home);
+    }
+    contentsList(entries,allEntries,session){
+        const list=el('div',{class:'pv-contents-list'}),ranges=contentsRanges(entries,session.chat,session.key);
+        const opened=new Set(this.workspaceViews?.get(JSON.stringify([session.key,'home']))?.openContents);
+        let nextRegion=0;
+        const render=({entry,children},ancestors)=>{
+            const node=el('div',{class:'pv-contents-node'}),header=el('div',{class:'pv-contents-header'});
+            const range=ranges.get(entry.id),title=entryDisplayTitle(entry,allEntries);
+            const location=range?(range.start===range.end?`сообщение ${range.start}`:`сообщения ${range.start}–${range.end}`):'диапазон недоступен';
+            const item=button('',()=>this.editEntry(entry,false)),label=el('span',{class:'pv-contents-label'});
+            item.classList.add('pv-contents-row');item.dataset.contentsEntry=entry.id;
+            label.append(el('strong',{},title),el('span',{},' — '+location));
+            item.append(outlineIcon(LEVEL_ICONS[entry.type]),label);
+            header.append(item);node.append(header);
+            if(!children.length){
+                item.append(outlineIcon('chevron','pv-contents-chevron'));
+                return node;
+            }
+            const path=[...ancestors,entry.id],key=JSON.stringify(path),id=`pensieve-contents-children-${++nextRegion}`;
+            const group=el('div',{class:'pv-contents-children',id}),toggle=button('',()=>setExpanded(group.hidden));
+            const setExpanded=open=>{
+                group.hidden=!open;
+                toggle.setAttribute('aria-expanded',String(open));
+                toggle.setAttribute('aria-label',`${open?'Свернуть':'Развернуть'} ${title}`);
+            };
+            toggle.classList.add('pv-contents-toggle');toggle.dataset.contentsBranch=key;
+            toggle.setAttribute('aria-controls',id);toggle.append(outlineIcon('chevron'));
+            setExpanded(opened.has(key));
+            for(const child of children)group.append(render(child,path));
+            header.append(toggle);node.append(group);
+            return node;
+        };
+        for(const node of contentsTree(entries,ranges))list.append(render(node,[]));
         if(!list.childElementCount)list.append(el('p',{class:'pv-muted'},'Сохранённых глав, частей и томов пока нет.'));
-        contents.append(el('h3',{},'Содержание'),list);home.append(state,quick,contents);this.content.append(home);
+        return list;
     }
     archiveView(archive) {
         this.content.append(el('h3',{class:'pv-view-heading'},'Архив воспоминаний'));

@@ -47,6 +47,23 @@ export function contentsRanges(entries,chat,key){
     return ranges;
 }
 
+export function contentsTree(entries,ranges){
+    const {byId}=hierarchyIndex(entries),children=new Map(),linked=new Set();
+    const compare=(left,right)=>{
+        const a=ranges.get(left.id),b=ranges.get(right.id);
+        return a&&b?a.start-b.start||a.end-b.end:Number(!a)-Number(!b);
+    };
+    for(const entry of entries){
+        const type=LEVELS[entry.type]?.sourceType;
+        if(!type)continue;
+        const records=[...new Set(childrenIds(entry))].map(id=>byId.get(id)).filter(child=>child?.type===type);
+        for(const record of records)linked.add(record.id);
+        children.set(entry.id,records.sort(compare));
+    }
+    const branch=entry=>({entry,children:(children.get(entry.id)??[]).map(branch)});
+    return entries.filter(entry=>!linked.has(entry.id)).sort(compare).map(branch);
+}
+
 export function memorySources(entries,chat,key,roots=memoryEntries(entries)) {
     const index=hierarchyIndex(entries),covered=new Set(roots.flatMap(e=>[e.id,...index.descendants(e)])),ids=new Set(),episodes=new Set();
     for(const [id,source] of localEpisodes(entries,chat,key))if(covered.has(id)&&source.complete){episodes.add(id);for(const id of source.matches)ids.add(id);}
