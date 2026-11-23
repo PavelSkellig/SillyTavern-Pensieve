@@ -3,12 +3,24 @@ import assert from 'node:assert/strict';
 import {defaults,emptyArchive,exportArchive,fingerprint,findOverlaps} from '../src/core.js';
 import {narrativeOrder} from '../src/order.js';
 import * as backup from '../src/backup.js';
+import {panelTheme} from '../src/themes.js';
 const entry=(id,type,order,ids=[],active=false)=>({id,type,order,active,title:id,text:'Русский текст '+id+' {{char}}',createdAt:'2026-11-10',updatedAt:'2026-11-10',version:2,history:[{version:1,title:'До',text:'Прежний текст',updatedAt:'2026'}],sources:type==='summary'?[{id:'m'+order,index:order,hash:fingerprint({name:'Test',mes:'Original '+order}),previousHidden:false}]:[],summaryIds:type==='arc'?ids:[],...(type==='volume'?{chapterIds:ids}:{}),needsReview:false});
 const fixture=()=>{const archive=emptyArchive('origin');archive.entries=[entry('s1','summary',0),entry('s2','summary',2),entry('s3','summary',4),entry('s4','summary',6),entry('a1','arc',0,['s1','s2']),entry('a2','arc',4,['s3','s4']),entry('v','volume',0,['a1','a2'],true),entry('new','summary',8,[],true)];const settings=defaults();for(const t of ['summary','arc','volume']){settings.prompts[t].presets[0].text='Промпт '+t+' {{user}}';settings.prompts[t].presets[0].history=['Прежний '+t];}return {archive,settings,source:{key:'origin',name:'Мой чат'}};};
 
 test('full UTF-8 backup includes every archived descendant, links, flags, prompts/settings and no unrelated credentials',()=>{
  const f=fixture(),before=JSON.stringify(f);f.settings.apiKey='DO_NOT_EXPORT';const file=backup.createBackup(f.archive,f.settings,f.source),parsed=backup.parseBackup(JSON.stringify(file));
  assert.equal(parsed.archive.entries.length,8);assert.deepEqual(parsed.archive.entries.find(e=>e.id==='v').chapterIds,['a1','a2']);assert.equal(parsed.archive.entries[0].text,'Русский текст s1 {{char}}');assert.deepEqual(parsed.prompts,f.settings.prompts);assert.equal(parsed.settings.tokenLimit,6000);assert.equal(JSON.stringify(file).includes('DO_NOT_EXPORT'),false);delete f.settings.apiKey;assert.equal(JSON.stringify(f),before);
+});
+test('all panel themes round-trip in backups and old identifiers retain their choices',()=>{
+ const f=fixture();
+ assert.equal(f.settings.theme,'dark');
+ for(const theme of ['dark','ice','light']){
+    f.settings.theme=theme;
+    const result=backup.parseBackup(JSON.stringify(backup.createBackup(f.archive,f.settings,f.source)));
+    assert.equal(result.settings.theme,theme);
+    assert.equal(panelTheme(result.settings.theme),theme);
+ }
+ assert.equal(panelTheme('unknown-theme'),'dark');
 });
 test('new-chat restore is inactive, detached and idempotent without rewriting historical sources or globals',()=>{
  const f=fixture(),file=backup.parseBackup(JSON.stringify(backup.createBackup(f.archive,f.settings,f.source))),before=JSON.stringify(file);let n=0;

@@ -9,8 +9,9 @@ import {createBackup,parseBackup,planRestore} from './backup.js';
 import {bounded} from './save-recovery.js';
 import {GenerationView,operationLabel} from './generation-view.js';
 import {validateCompression,compressionValues} from './compression.js';
-import {messageLabels} from './source-links.js';
+import {contentsRanges,messageLabels} from './source-links.js';
 import {OMISSION_KINDS} from './coverage.js';
+import {PANEL_THEMES,panelTheme} from './themes.js';
 
 export {UI_VERSION};
 
@@ -18,6 +19,19 @@ const editorDisplay=text=>text.replace(/\r\n?/g,'\n');
 const el=(tag,attrs={},text='')=>{const node=document.createElement(tag);for(const [k,v]of Object.entries(attrs))if(k==='class')node.className=v;else if(k==='checked')node.checked=v;else node.setAttribute(k,String(v));if(text)node.textContent=text;return node;};
 const button=(text,fn,primary=false)=>{const b=el('button',{type:'button',class:primary?'pv-primary':''},text);b.addEventListener('click',guardAction(fn,{stage:'handler',operation:'ui',severity:'warning'}));return b;};
 const iconButton=(text,fn,glyph,primary=false)=>{const b=button('',fn,primary);b.append(el('i',{class:'fa-solid '+glyph,'aria-hidden':'true'}),el('span',{},text));return b;};
+const TAB_ICONS={home:'home',archive:'archive',memory:'brain',prompts:'prompts',settings:'settings'};
+const LEVEL_ICONS={summary:'book',arc:'layers',volume:'volume'};
+const sprite=new URL('../assets/icons_outline_sprite.svg',import.meta.url);
+function outlineIcon(name,extraClass=''){
+    const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),use=document.createElementNS(ns,'use');
+    svg.setAttribute('class',`pv-outline ${extraClass}`.trim());
+    svg.setAttribute('viewBox','0 0 24 24');
+    svg.setAttribute('aria-hidden','true');
+    svg.setAttribute('focusable','false');
+    use.setAttribute('href',sprite.href+'#ico-'+name);
+    svg.append(use);
+    return svg;
+}
 const row=(...nodes)=>{const r=el('div',{class:'pv-row'});r.append(...nodes);return r;};
 const field=(title,node)=>{const l=el('label',{},title);l.append(node);return l;};
 const download=(name,text,type='application/json')=>{const url=URL.createObjectURL(new Blob([text],{type}));const a=el('a',{href:url,download:name});a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
@@ -36,13 +50,27 @@ export class UI {
         if(caption){caption.classList.add('pv-caption');caption.parentElement.classList.add('pv-brand');caption.append(document.createTextNode(' · '),version);}
         else this.panel.querySelector('.pv-header').append(version);
         const head=this.panel.querySelector('.pv-header');
-        if(!head.querySelector('.pv-brand-mark')){head.querySelector('h2 i')?.remove();const mark=el('div',{class:'pv-brand-mark','aria-hidden':'true'});mark.append(el('i',{class:'fa-solid fa-book-open'}));head.prepend(mark);}
-        const tabIcons={home:'fa-house',archive:'fa-box-archive',memory:'fa-brain',prompts:'fa-file-lines',settings:'fa-gear'};this.panel.querySelectorAll('[data-tab]').forEach(b=>{const label=({home:'Главная',archive:'Архив',memory:'Память',prompts:'Промпты',settings:'Настройки'})[b.dataset.tab];b.setAttribute('aria-label',label);b.replaceChildren(el('i',{class:'fa-solid pv-tab-icon '+tabIcons[b.dataset.tab],'aria-hidden':'true'}),el('span',{class:'pv-tab-full'},label));});
+        head.classList.add('pv-hero');
+        head.querySelectorAll('.pv-header-art, .pv-sky').forEach(node=>node.remove());
+        const overlay=head.querySelector('.pv-hero-overlay')??el('div',{class:'pv-hero-overlay'});
+        const controls=head.querySelector('.pv-header-controls')??el('div',{class:'pv-header-controls'});
+        const mark=head.querySelector('.pv-brand-mark')??el('div',{class:'pv-brand-mark','aria-hidden':'true'});
+        mark.replaceChildren(outlineIcon('book'));
+        const brand=head.querySelector('.pv-brand');
+        overlay.append(mark);if(brand)overlay.append(brand);
+        this.panel.querySelectorAll('[data-tab]').forEach(control=>{
+            const label=control.textContent.trim();
+            control.setAttribute('aria-label',label);
+            control.replaceChildren(outlineIcon(TAB_ICONS[control.dataset.tab],'pv-tab-icon'),el('span',{class:'pv-tab-full'},label));
+        });
         // Also upgrade a cached older panel template without requiring a hard reload.
         let minimize=this.panel.querySelector('[data-action="minimize"]');
-        if(!minimize){minimize=button('−',()=>this.minimize());minimize.dataset.action='minimize';minimize.classList.add('pv-icon');minimize.setAttribute('aria-label','Свернуть окно');this.panel.querySelector('[data-action="close"]').before(minimize);}
+        if(!minimize)minimize=el('button',{type:'button',class:'pv-icon','data-action':'minimize','aria-label':'Свернуть окно'});
         minimize.onclick=()=>this.minimize();
-        this.panel.querySelector('[data-action="close"]').onclick=()=>this.close();
+        minimize.replaceChildren(outlineIcon('minimize'));
+        const close=this.panel.querySelector('[data-action="close"]');
+        close.onclick=()=>this.close();close.replaceChildren(outlineIcon('close'));
+        controls.append(minimize,close);head.append(overlay,controls);
         this.restoreDock=el('div',{id:'pensieve-restore-dock',hidden:'true'});
         const restore=iconButton('Омут памяти',()=>this.restore(),'fa-book-open');restore.setAttribute('aria-label','Восстановить Омут памяти');this.restoreDock.append(restore);
         this.restoreButton=restore;this.operationBanner=el('div',{class:'pv-operation-banner',role:'status',hidden:'true'});this.panel.querySelector('.pv-notice').before(this.operationBanner);
@@ -53,8 +81,6 @@ export class UI {
             const updateComposer=()=>this.panel.style.setProperty('--pv-composer-height',Math.ceil(composer.getBoundingClientRect().height)+'px');
             this.composerObserver=new ResizeObserver(updateComposer);this.composerObserver.observe(composer);updateComposer();
         }
-        let artwork=head.querySelector('.pv-header-art');if(!artwork){artwork=el('img',{class:'pv-header-art',alt:'Серебряная чаша Омута памяти с голубым водоворотом',width:1672,height:941});head.prepend(artwork);}artwork.src=new URL('../assets/pensieve-header.png',import.meta.url).href;
-        head.classList.add('pv-hero');const overlay=head.querySelector('.pv-hero-overlay')??el('div',{class:'pv-hero-overlay'}),controls=head.querySelector('.pv-header-controls')??el('div',{class:'pv-header-controls'});for(const control of head.querySelectorAll('[data-action="minimize"],[data-action="close"]'))controls.append(control);overlay.append(head.querySelector('.pv-brand-mark'),head.querySelector('.pv-brand'),controls);if(!overlay.isConnected)head.append(overlay);
         // Keep ST's document-wide drawer handlers out of this window's click path.
         this.watchKeyboard();
         this.panel.addEventListener('click',event=>event.stopPropagation());
@@ -213,17 +239,17 @@ export class UI {
             type:'button','aria-expanded':'false','aria-controls':'pensieve-settings-content',
         });
         const title=el('b',{class:'pv-settings-title'});
-        title.append(el('i',{class:'fa-solid fa-book-open','aria-hidden':'true'}),el('span',{},'Омут памяти'));
+        title.append(outlineIcon('book'),el('span',{},'Омут памяти'));
         const icon=el('div',{class:'inline-drawer-icon fa-solid fa-circle-chevron-down down','aria-hidden':'true'});
         header.append(title,icon);
         const content=el('div',{id:'pensieve-settings-content',class:'inline-drawer-content pv-settings-content'});
         const actions=el('div',{class:'pv-settings-actions'});
         const items=[
-            ['pensieve-settings-home','Главная','fa-house',()=>this.open('home')],
-            ['pensieve-settings-archive','Архив','fa-box-archive',()=>this.open('archive')],
-            ['pensieve-settings-memory','Память','fa-eye',()=>this.open('memory')],
-            ['pensieve-settings-prompts','Промпты','fa-feather',()=>this.open('prompts')],
-            ['pensieve-settings-options','Настройки','fa-gear',()=>this.open('settings')],
+            ['pensieve-settings-home','Главная',TAB_ICONS.home,()=>this.open('home')],
+            ['pensieve-settings-archive','Архив',TAB_ICONS.archive,()=>this.open('archive')],
+            ['pensieve-settings-memory','Память',TAB_ICONS.memory,()=>this.open('memory')],
+            ['pensieve-settings-prompts','Промпты',TAB_ICONS.prompts,()=>this.open('prompts')],
+            ['pensieve-settings-options','Настройки',TAB_ICONS.settings,()=>this.open('settings')],
         ];
         for(const [id,label,glyph,action]of items) {
             const control=button('',event=>{
@@ -231,7 +257,7 @@ export class UI {
                 const settingsDrawer=document.querySelector('#extensions-settings-button .drawer-content');
                 if(settingsDrawer?.classList.contains('openDrawer'))document.querySelector('#extensions-settings-button .drawer-toggle')?.click();
             });control.id=id;control.className='pv-settings-action';
-            control.append(el('i',{class:`fa-solid ${glyph}`,'aria-hidden':'true'}),el('span',{},label));
+            control.append(outlineIcon(glyph),el('span',{},label));
             actions.append(control);
         }
         content.append(actions);drawer.append(header,content);root.append(drawer);container.append(root);
@@ -328,20 +354,25 @@ export class UI {
     go(tab,force=false) {if(!force&&this.canReuseView(tab))return;this.tab=tab;this.showNotice('');this.render().catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));}
     memorySnapshot(){return trace({code:'MEM-005',stage:'tokens'},()=>bounded(()=>this.e.refreshMemory(),this.e.policy().tokensTimeout));}
     postSaveRefresh(){this.refresh(true,this.e.peekMemory?.()).catch(error=>this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'}));}
+    applyTheme(){
+        const theme=panelTheme(this.e.settings().theme);
+        document.querySelectorAll('dialog.pensieve, #pensieve-settings, #pensieve-restore-dock').forEach(node=>{if(node.dataset.theme!==theme)node.dataset.theme=theme;});
+    }
     async refresh(render=false,snapshot=null) {
         if(render)clearTimeout(this.timer);
         if(this.windowState!=='open')this.resumeDirty=true;
         const tab=this.tab;
-        this.panel.dataset.theme=this.e.settings().theme;
+        this.applyTheme();
         const memory=snapshot??await this.memorySnapshot();this.lastMemory=memory;try{this.decorateMessages();}catch(error){this.issue(error,{code:'UI-001',stage:'ui',severity:'warning'});}
         if(memory.blocked&&tab!=='memory'&&!this.diagnosticsView?.visible&&!this.diagnosticOperationDismissed){this.memoryNotice=memory.reason;this.showNotice(memory.reason);}
         else if(this.panel.querySelector('.pv-notice').textContent===this.memoryNotice){this.showNotice('');this.memoryNotice=null;}
         if(render&&this.panel.open&&this.tab===tab)await this.render(memory);
     }
     async render(snapshot=null) {
-        const stamp=++this.renderId;this.panel.dataset.theme=this.e.settings().theme;
+        const stamp=++this.renderId;this.applyTheme();
         this.rememberView();this.content.dataset.ready='false';
         this.content.dataset.view=this.tab;
+        this.content.scrollTop=0;
         this.panel.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-current',b.dataset.tab===this.tab?'page':'false'));
         this.content.replaceChildren(el('p',{class:'pv-muted'},'Загрузка архива…'));
         let session;try{session=this.e.session();}catch(error){
@@ -367,7 +398,7 @@ export class UI {
         this.panel.querySelector('.pv-chat-name').textContent=`Чат: ${this.e.host.context().chatId}`;
         if(archive.pending)this.content.append(el('div',{class:'pv-warning'},'Есть незавершённая операция. В настройках можно завершить её или вернуть исходники в контекст.'));
         if(bytes(archive)>WARN_ARCHIVE_BYTES)this.content.append(el('div',{class:'pv-warning'},'Архив больше 5 MiB. Сохраните резервную копию JSON.'));
-        if(this.tab==='home')this.home(archive);
+        if(this.tab==='home')this.home(archive,session);
         if(this.tab==='archive')this.archiveView(archive);
         if(this.tab==='memory')await this.memoryView(archive,stamp);
         if(this.tab==='prompts')this.promptsView();
@@ -391,27 +422,33 @@ export class UI {
         if(enabled){const warning=el('p',{class:'pv-muted pv-macro-status'},'Проверка макроса в используемом пресете…');section.append(warning);this.macroNote(warning,pill,position);}
         return section;
     }
-    recentReductions(archive){
-        const section=el('section',{class:'pv-recent-reductions','aria-label':'Последние сокращения'}),heading=el('h3');heading.append(el('i',{class:'fa-solid fa-chart-simple','aria-hidden':'true'}),document.createTextNode('Последние сокращения'));section.append(heading);
-        let op=this.operationSnapshot;try{if(op?.scope&&op.scope!==this.e.recovery.key(this.e.key()))op=null;}catch{op=null;}
-        if(archive.pending?.type==='backup'||op?.state==='waiting'){section.append(el('p',{class:'pv-muted'},'Список обновится после подтверждения незавершённого сохранения.'));return section;}
-        const date=e=>{const n=Date.parse(e.compression?.updatedAt??e.updatedAt??e.createdAt);return Number.isFinite(n)?n:0;},entries=archive.entries.map((entry,index)=>({entry,index})).filter(({entry})=>entry.id!==archive.pending?.entryId).sort((a,b)=>date(b.entry)-date(a.entry)||b.index-a.index).slice(0,3);
-        if(!entries.length)section.append(el('p',{class:'pv-muted'},'Здесь появятся последние сохранённые главы, части и тома.'));
-        for(const {entry}of entries){const row=el('article',{class:'pv-reduction-row','data-recent-entry':entry.id}),name=button(entryDisplayTitle(entry,archive.entries),()=>this.editEntry(entry,false)),kind=el('span',{class:'pv-level-pill pv-level-'+entry.type},LEVELS[entry.type].name),values=this.recordCompression(entry)?.values;name.className='pv-reduction-name';name.title=entryDisplayTitle(entry,archive.entries);row.append(name,kind);
-            if(!values)row.append(el('span',{class:'pv-reduction-unavailable'},'Статистика недоступна'));
-            else{const prefix=values.approximate?'≈ ':'',growing=values.saved<0,sign=values.saved>0?'−':growing?'+':'',amount=Math.abs(values.saved).toLocaleString('ru-RU'),percent=values.percent===null?'':` (${sign}${Math.abs(values.percent).toLocaleString('ru-RU',{maximumFractionDigits:0})}%)`;row.append(el('span',{class:'pv-reduction-tokens'},`${prefix}${values.before.toLocaleString('ru-RU')} → ${values.after.toLocaleString('ru-RU')}`),el('span',{class:'pv-reduction-delta '+(growing?'pv-reduction-growth':'pv-reduction-saving'),'aria-label':(growing?'Увеличение объёма: ':'Сокращение: ')+amount+' токенов'},`${prefix}${sign}${amount}${percent}`));}section.append(row);
+    home(archive,session) {
+        const home=el('div',{class:'pv-home'}),state=el('section',{class:'pv-home-state'}),counts=el('div',{class:'pv-home-counts'});
+        const quick=el('section',{class:'pv-home-quick'}),actions=el('div',{class:'pv-home-actions'});
+        const contents=el('section',{class:'pv-home-contents'}),list=el('div',{class:'pv-contents-list'});
+        const entries=archive.entries.filter(entry=>entry.id!==archive.pending?.entryId);
+        const ranges=contentsRanges(entries,session.chat,session.key);
+        for(const [type,level] of Object.entries(LEVELS)){
+            const records=entries.filter(entry=>entry.type===type),card=el('div',{class:'pv-count-card','data-count':type});
+            card.append(outlineIcon(LEVEL_ICONS[type]),el('span',{},level.plural),el('strong',{},records.length.toLocaleString('ru-RU')));
+            counts.append(card);
+            const latest=records.sort((a,b)=>Number(entryNumber(b,entries))-Number(entryNumber(a,entries)))[0];
+            if(!latest)continue;
+            const range=ranges.get(latest.id),title=entryDisplayTitle(latest,archive.entries);
+            const location=range?(range.start===range.end?`сообщение ${range.start}`:`сообщения ${range.start}–${range.end}`):'диапазон недоступен';
+            const item=button('',()=>this.editEntry(latest,false)),label=el('span',{class:'pv-contents-label'});
+            item.classList.add('pv-contents-row');item.dataset.contentsEntry=latest.id;
+            label.append(el('strong',{},title),el('span',{},' — '+location));
+            item.append(outlineIcon(LEVEL_ICONS[type]),label,outlineIcon('chevron','pv-contents-chevron'));
+            list.append(item);
         }
-        return section;
-    }
-    home(archive) {
-        const home=el('section',{class:'pv-home'}),heading=el('div',{class:'pv-home-heading'});heading.append(el('h3',{},'Главная'),el('p',{class:'pv-muted'},'Быстрый доступ к основным операциям'));
-        const actions=el('div',{class:'pv-home-actions'}),select=type=>{this.archiveTab=type;this.archiveFilter='all';this.archiveSearch='';this.go('archive',true);};
-        for(const [type,title,subtitle,glyph]of [['summary','Создать часть','Из выбранных глав','fa-layer-group'],['arc','Создать том','Из выбранных частей','fa-book-open']]){const tile=button('',()=>select(type)),label=el('span',{class:'pv-creation-label'});label.append(el('strong',{},title),el('small',{},subtitle));tile.className='pv-creation-card';tile.append(el('i',{class:'fa-solid '+glyph,'aria-hidden':'true'}),label,el('i',{class:'fa-solid fa-arrow-right pv-creation-arrow','aria-hidden':'true'}));actions.append(tile);}
-        const hint=el('p',{class:'pv-home-hint'});hint.append(el('i',{class:'fa-regular fa-circle-info','aria-hidden':'true'}),document.createTextNode('Главы создаются непосредственно в чате: отметьте начало и конец диапазона.'));
-        const state=el('section',{class:'pv-home-state'}),stateHead=el('div',{class:'pv-home-state-heading'}),enabled=!!(this.e.settings().enabled&&this.e.settings().inject);stateHead.append(el('h3',{},'Состояние памяти'),el('span',{class:'pv-enabled-pill '+(enabled?'pv-is-enabled':'')},enabled?'Включена':'Выключена'));
-        const counts=el('div',{class:'pv-home-counts'}),plural=(n,forms)=>n%100>=11&&n%100<=14?forms[2]:n%10===1?forms[0]:n%10>=2&&n%10<=4?forms[1]:forms[2];
-        for(const [type,forms,glyph]of [['summary',['Глава','Главы','Глав'],'fa-book-open'],['arc',['Часть','Части','Частей'],'fa-layer-group'],['volume',['Том','Тома','Томов'],'fa-book']]){const n=archive.entries.filter(e=>e.type===type).length,card=el('div',{class:'pv-count-card'}),label=el('div');label.append(el('strong',{},n.toLocaleString('ru-RU')),el('span',{},plural(n,forms)));card.append(el('i',{class:'fa-solid '+glyph,'aria-hidden':'true'}),label);counts.append(card);}
-        const view=iconButton('Посмотреть активную память',()=>this.go('memory'),'fa-eye');view.className='pv-active-memory-link';state.append(stateHead,counts,this.memoryUsage(),view);home.append(heading,actions,hint,state,this.recentReductions(archive));this.content.append(home);
+        for(const [type,title,icon] of [['summary','Создать часть','document'],['arc','Создать том','volume']]){
+            const tile=button('',()=>{this.archiveTab=type;this.archiveFilter='all';this.archiveSearch='';this.go('archive',true);});
+            tile.classList.add('pv-creation-card');tile.append(outlineIcon(icon),el('span',{},title));actions.append(tile);
+        }
+        state.append(el('h3',{},'Состояние памяти'),counts);quick.append(el('h3',{},'Быстрые действия'),actions);
+        if(!list.childElementCount)list.append(el('p',{class:'pv-muted'},'Сохранённых глав, частей и томов пока нет.'));
+        contents.append(el('h3',{},'Содержание'),list);home.append(state,quick,contents);this.content.append(home);
     }
     archiveView(archive) {
         this.content.append(el('h3',{class:'pv-view-heading'},'Архив воспоминаний'));
@@ -643,6 +680,27 @@ export class UI {
         dialog.onclose=()=>{text.value=area.value;text.dispatchEvent(new Event('input'));dialog.remove();};dialog.showModal();area.focus();
     }
     saveSettings() {this.e.host.context().saveSettingsDebounced();this.schedule();}
+    themeChoices(settings){
+        const group=el('div',{class:'pv-themes',role:'group','aria-labelledby':'pensieve-theme-label'});
+        const choices=el('div',{class:'pv-theme-choices'});
+        group.append(el('h4',{id:'pensieve-theme-label'},'Тема панели'),choices);
+        for(const [id,theme] of Object.entries(PANEL_THEMES)){
+            const control=button('',()=>{
+                settings.theme=id;
+                this.applyTheme();
+                for(const choice of choices.children)choice.setAttribute('aria-pressed',String(choice===control));
+                this.saveSettings();
+            });
+            control.className='pv-theme-choice';control.dataset.themeChoice=id;
+            control.setAttribute('aria-pressed',String(panelTheme(settings.theme)===id));
+            const thumbnail=el('img',{src:new URL('../assets/'+theme.image,import.meta.url).href,alt:'',width:1400,height:460});
+            const label=el('span',{class:'pv-theme-label'}),words=el('span');
+            words.append(el('strong',{},theme.name),el('small',{},theme.art));
+            label.append(words,outlineIcon('check','pv-theme-check'));
+            control.append(thumbnail,label);choices.append(control);
+        }
+        return group;
+    }
     memoryPlacementView(section,settings) {
         section.classList.add('pv-memory-placement');
         const modes=[
@@ -751,7 +809,7 @@ export class UI {
         }
         const limit=el('input',{type:'number',min:1,step:100,value:settings.tokenLimit});limit.onchange=()=>{if(Number.isFinite(Number(limit.value))&&Number(limit.value)>0){settings.tokenLimit=Math.floor(Number(limit.value));this.saveSettings();}else limit.value=settings.tokenLimit;};memory.append(field('Максимальный объём памяти, токенов',limit));
         const note=el('textarea',{class:'pv-short'},settings.pastNote);note.onchange=()=>{settings.pastNote=note.value;this.saveSettings();};appearance.append(field('Редактируемая пометка о прошлых событиях',note));
-        const theme=el('select');theme.append(el('option',{value:'dark'},'Полуночный синий'),el('option',{value:'light'},'Светлый пергамент'));theme.value=settings.theme;theme.onchange=()=>{settings.theme=theme.value;this.panel.dataset.theme=theme.value;this.saveSettings();};appearance.append(field('Тема панели',theme));
+        appearance.append(this.themeChoices(settings));
         archiveGroup.append(el('p',{class:'pv-muted'},'Перед обновлением скачайте полную резервную копию памяти. Она включает архив, промпты и настройки.'));
         if(archive){const complete=el('section',{class:'pv-complete-backup'});complete.append(el('h4',{},'Резервная копия памяти'),el('p',{class:'pv-muted'},'Один JSON: все главы, части, тома, их связи, промпты и настройки. Копия восстанавливает память, а не удалённую переписку.'),row(iconButton('Экспортировать всё',()=>this.act(()=>this.exportFullBackup()),'fa-download',true),iconButton('Восстановить из копии',()=>this.readFullBackup(),'fa-upload')));archiveGroup.append(complete,el('p',{class:'pv-muted'},`Архив текущего чата: ${(bytes(archive)/1024).toFixed(1)} KiB. Резервная копия содержит личные тексты — храните её у себя.`));
         archiveGroup.append(row(button('Экспорт архива JSON',()=>fileTrace('backup-export',()=>download('pensieve-archive.json',JSON.stringify(exportArchive(this.e.archive()),null,2)))),button('Импорт архива JSON',()=>this.readFullBackup())));
@@ -832,7 +890,7 @@ export class UI {
         mode.onchange=planMode;ack.onchange=update;body.append(row(save,cancel));dialog.oncancel=event=>{if(applying)event.preventDefault();else dialog.pensieveRetained=false;};dialog.onclose=()=>{if(!dialog.open&&!dialog.pensieveRetained){dialog.remove();this.diagnosticsView?.forgetOperation(dialog);if(this.backupDialog===dialog)this.backupDialog=null;}};planMode();dialog.showModal();
     }
     makeDialog(title,chatScoped=false) {
-        const dialog=el('dialog',{class:'pensieve pv-editor','data-theme':this.e.settings().theme});
+        const dialog=el('dialog',{class:'pensieve pv-editor','data-theme':panelTheme(this.e.settings().theme)});
         if(chatScoped)dialog.dataset.chatScoped='true';
         const head=el('header',{class:'pv-header'}),close=button('×',()=>{if(dialog.dispatchEvent(new Event('cancel',{cancelable:true})))dialog.close();});close.classList.add('pv-icon');close.setAttribute('aria-label','Закрыть окно');head.append(el('h2',{},title),close);dialog.setAttribute('aria-label',title);const body=el('div',{class:'pv-content'});dialog.append(head,body);document.body.append(dialog);return {dialog,body};
     }

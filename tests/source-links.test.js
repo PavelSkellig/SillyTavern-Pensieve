@@ -26,3 +26,28 @@ test('labels never bind foreign or ambiguous messages and do not modify messages
  assert.equal(links.messageLabels?.(entries,[message,structuredClone(message)],'local')?.size,0);
  assert.equal(JSON.stringify([entries,message]),before);
 });
+test('contents ranges use the live zero-based message numbers and include hidden originals',()=>{
+ const hidden={...message,extra:{pensieve:{id:'hidden'}},mes:'HIDDEN SOURCE',is_system:true};
+ const tail={...message,extra:{pensieve:{id:'tail'}},mes:'LAST SOURCE'};
+ const second={...episode,id:'e10',sources:[{id:'hidden',hash:fingerprint(hidden),index:24},{id:'tail',hash:fingerprint(tail),index:25}]};
+ const part={...chapter,summaryIds:[episode.id,second.id]},entries=[episode,second,part,volume];
+ const chat=[message,{mes:'Gap'},hidden,tail],before=JSON.stringify([entries,chat]);
+ const ranges=links.contentsRanges(entries,chat,'local');
+ assert.deepEqual(ranges.get(episode.id),{start:0,end:0});
+ assert.deepEqual(ranges.get(second.id),{start:2,end:3});
+ assert.deepEqual(ranges.get(part.id),{start:0,end:3});
+ assert.deepEqual(ranges.get(volume.id),{start:0,end:3});
+ assert.equal(JSON.stringify([entries,chat]),before);
+});
+test('contents ranges hide stale or foreign sources along with dependent ranges',()=>{
+ const unavailable=[
+  [[episode,chapter,volume],[]],
+  [[episode,chapter,volume],[message,structuredClone(message)]],
+  [[episode,chapter,volume],[{...message,mes:'EDITED'}]],
+  [[{...episode,sourceChat:'elsewhere'},chapter,volume],[message]],
+  [[{...episode,imported:true},chapter,volume],[message]],
+  [[{...episode,detachedSources:true},chapter,volume],[message]],
+ ];
+ for(const [entries,chat] of unavailable)assert.deepEqual([...links.contentsRanges(entries,chat,'local').values()],[null,null,null]);
+ assert.equal(links.contentsRanges([chapter,volume],[message],'local').get(volume.id),null);
+});

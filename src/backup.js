@@ -1,5 +1,6 @@
 import {clone,bytes,validateArchive,MAX_ARCHIVE_BYTES,fingerprint,inspectSources,memoryEntries,hasDetachedSources,resolveImportedChapterNumbers} from './core.js';
 import {childrenIds,hierarchyIndex} from './hierarchy.js';
+import {PANEL_THEMES} from './themes.js';
 
 const ownObject=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const requireString=(value,label,max=MAX_ARCHIVE_BYTES)=>{if(typeof value!=='string'||value.length>max)throw Error(`Некорректное поле резервной копии: ${label}.`);return value;};
@@ -20,7 +21,7 @@ export function validateBackupSettings(value) {
     if(!ownObject(value))throw Error('В копии отсутствуют настройки памяти.');const result={};
     if(value.showMessageLabels!==undefined){if(typeof value.showMessageLabels!=='boolean')throw Error('Повреждена настройка меток сообщений.');result.showMessageLabels=value.showMessageLabels;}
     for(const key of booleanSettings){if(typeof value[key]!=='boolean')throw Error('Повреждена настройка памяти: '+key);result[key]=value[key];}
-    if(!Number.isSafeInteger(value.tokenLimit)||value.tokenLimit<1||!Number.isInteger(value.depth)||value.depth<0||value.depth>10000||![-1,0,1,2].includes(value.position)||!['dark','light'].includes(value.theme))throw Error('Неверные лимит, позиция или тема памяти.');
+    if(!Number.isSafeInteger(value.tokenLimit)||value.tokenLimit<1||!Number.isInteger(value.depth)||value.depth<0||value.depth>10000||![-1,0,1,2].includes(value.position)||!Object.hasOwn(PANEL_THEMES,value.theme))throw Error('Неверные лимит, позиция или тема памяти.');
     Object.assign(result,{tokenLimit:value.tokenLimit,depth:value.depth,position:value.position,theme:value.theme,pastNote:requireString(value.pastNote,'пометка о прошлом')});
     if(value.role!==undefined&&![0,1,2].includes(value.role))throw Error('Некорректная роль памяти.');
     Object.assign(result,{role:value.role??0,template:value.template===undefined?'':requireString(value.template,'шаблон инжекта')});

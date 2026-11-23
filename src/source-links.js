@@ -1,5 +1,5 @@
 import {KEY,fingerprint,matchesSourceFingerprint,hasDetachedSources,memoryEntries} from './core.js';
-import {hierarchyIndex,LEVELS,entryNumber} from './hierarchy.js';
+import {childrenIds,hierarchyIndex,LEVELS,entryNumber} from './hierarchy.js';
 
 // Original source identity is checked against live, unformatted messages, never prompt indices.
 function localEpisodes(entries,chat,key) {
@@ -17,6 +17,34 @@ function localEpisodes(entries,chat,key) {
         episodes.set(entry.id,{entry,matches,complete:matches.length===entry.sources.length});
     }
     return episodes;
+}
+
+export function contentsRanges(entries,chat,key){
+    const chapters=localEpisodes(entries,chat,key),ranges=new Map(),index=hierarchyIndex(entries),positions=new Map();
+    chat.forEach((message,i)=>{const id=message.extra?.[KEY]?.id;if(id)positions.set(id,i);});
+    const resolve=entry=>{
+        if(ranges.has(entry.id))return ranges.get(entry.id);
+        ranges.set(entry.id,null);
+        const sourceChat=entry.sourceChat??entry.origin?.chat;
+        if(hasDetachedSources(entry)||sourceChat&&sourceChat!==key)return null;
+        let range;
+        if(entry.type==='summary'){
+            const chapter=chapters.get(entry.id);
+            if(!chapter?.complete||!chapter.matches.length)return null;
+            const start=positions.get(chapter.matches[0]);
+            if(chapter.matches.some((id,i)=>positions.get(id)!==start+i))return null;
+            range={start,end:start+chapter.matches.length-1};
+        }else{
+            const children=childrenIds(entry).map(id=>index.byId.get(id));
+            if(!children.length||children.some(child=>child?.type!==LEVELS[entry.type]?.sourceType))return null;
+            const sources=children.map(resolve);
+            if(sources.some(source=>!source))return null;
+            range={start:Math.min(...sources.map(source=>source.start)),end:Math.max(...sources.map(source=>source.end))};
+        }
+        ranges.set(entry.id,range);return range;
+    };
+    entries.forEach(resolve);
+    return ranges;
 }
 
 export function memorySources(entries,chat,key,roots=memoryEntries(entries)) {
