@@ -44,11 +44,8 @@ export class UI {
     async mount(html) {
         const template=el('template');template.innerHTML=html;document.body.append(template.content);
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
-        // Report the code that actually loaded, even if a newer manifest is already available.
-        const version=el('span',{class:'pv-version','aria-label':'Версия интерфейса'},`v${UI_VERSION}`);
         const caption=this.panel.querySelector('.pv-caption')??this.panel.querySelector('.pv-header p');
-        if(caption){caption.classList.add('pv-caption');caption.parentElement.classList.add('pv-brand');caption.append(document.createTextNode(' · '),version);}
-        else this.panel.querySelector('.pv-header').append(version);
+        if(caption){caption.classList.add('pv-caption');caption.parentElement.classList.add('pv-brand');}
         const head=this.panel.querySelector('.pv-header');
         head.classList.add('pv-hero');
         head.querySelectorAll('.pv-header-art, .pv-sky').forEach(node=>node.remove());
