@@ -10,7 +10,7 @@ await fs.mkdir('work/screenshots',{recursive:true});
 try {
  const context=await browser.newContext(pw.devices['iPhone 13']),page=await context.newPage(),errors=[];let modelRequests=0;
  page.on('pageerror',e=>errors.push(e.message));
- if(process.argv[5]==='legacy-template')await page.route('**/SillyTavern-Pensieve/panel.html',async route=>{const response=await route.fetch(),body=(await response.text()).replace('class="pv-caption"','').replace('class="pv-brand"','').replace(/<div class="pv-brand-mark"[^>]*>[\s\S]*?<\/div>\s*/,'').replace('<h2 id="pensieve-title">','<h2 id="pensieve-title"><i class="fa-solid fa-book-open" aria-hidden="true"></i> ');await route.fulfill({response,body});});
+ if(process.argv[5]==='legacy-template')await page.route('**/SillyTavern-Pensieve/panel.html',async route=>{const response=await route.fetch(),body=(await response.text()).replace('class="pv-brand"','').replace(/<div class="pv-brand-mark"[^>]*>[\s\S]*?<\/div>\s*/,'').replace('<h2 id="pensieve-title">','<h2 id="pensieve-title"><i class="fa-solid fa-book-open" aria-hidden="true"></i>').replace('</h2>','</h2><p>Архив воспоминаний</p>');await route.fulfill({response,body});});
  if(engine==='webkit')await page.route('**/api/settings/get',async route=>{const response=await route.fetch(),data=await response.json(),s=JSON.parse(data.settings);s.extension_settings.disabledExtensions=[...new Set([...(s.extension_settings.disabledExtensions??[]),'tts'])];data.settings=JSON.stringify(s);await route.fulfill({response,json:data});});
  await page.route('**/api/backends/chat-completions/generate',async route=>{modelRequests++;await route.fulfill({json:{choices:[{message:{role:'assistant',content:'UNEXPECTED MODEL REQUEST'},finish_reason:'stop'}]}});});
  await page.goto(process.argv[4]??'http://127.0.0.1:18273');await page.waitForFunction(()=>window.SillyTavern&&document.querySelector('#pensieve-settings-toggle'));await page.waitForTimeout(800);
@@ -32,7 +32,7 @@ try {
  const panel=page.locator('#pensieve-panel');await openWorkspace(page,'home');await panel.locator('[name="rangeStart"]').waitFor();
  await panel.locator('[name="rangeStart"]').fill('1');await panel.locator('[name="rangeEnd"]').fill('42');
  await page.screenshot({path:`work/screenshots/compact-home-${engine}.png`});
- assert.equal(await panel.locator('.pv-hero .pv-caption').innerText(),'Архив воспоминаний');
+ assert.equal((await panel.locator('.pv-hero').innerText()).trim(),'Омут памяти');
  const preview=panel.locator('.pv-range-preview'),details=preview.locator('details');assert.ok((await preview.innerText()).includes('Сообщения 1–42 · 42 сообщения'));assert.ok(!(await preview.innerText()).includes('TAIL_1'));
  assert.ok((await preview.innerText()).includes('Уже сохранено в главе №3'));assert.equal(await details.getAttribute('open'),null);assert.equal(await preview.locator('.pv-full-preview > *').count(),0,'full DOM is lazy');assert.ok((await preview.locator('.pv-range-snippet').allTextContents()).every(text=>text.length<120));
  await details.getByText('Показать подробнее',{exact:true}).tap();await preview.locator('.pv-full-preview > *').nth(41).waitFor();assert.ok((await preview.innerText()).includes('TAIL_42'));assert.equal(await preview.locator('img').count(),0,'message text remains literal');

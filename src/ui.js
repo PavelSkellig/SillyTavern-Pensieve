@@ -44,17 +44,17 @@ export class UI {
     async mount(html) {
         const template=el('template');template.innerHTML=html;document.body.append(template.content);
         this.panel=document.querySelector('#pensieve-panel');this.content=this.panel.querySelector('.pv-content');
-        const caption=this.panel.querySelector('.pv-caption')??this.panel.querySelector('.pv-header p');
-        if(caption){caption.classList.add('pv-caption');caption.parentElement.classList.add('pv-brand');}
         const head=this.panel.querySelector('.pv-header');
         head.classList.add('pv-hero');
-        head.querySelectorAll('.pv-header-art, .pv-sky').forEach(node=>node.remove());
         const overlay=head.querySelector('.pv-hero-overlay')??el('div',{class:'pv-hero-overlay'});
         const controls=head.querySelector('.pv-header-controls')??el('div',{class:'pv-header-controls'});
         const mark=head.querySelector('.pv-brand-mark')??el('div',{class:'pv-brand-mark','aria-hidden':'true'});
+        const title=head.querySelector('#pensieve-title');
+        const brand=head.querySelector('.pv-brand')??el('div',{class:'pv-brand'});
+        // Keep only the title from cached templates with an old caption or inline icon.
+        title.querySelector('i')?.remove();
+        brand.replaceChildren(title);
         mark.replaceChildren(outlineIcon('book'));
-        const brand=head.querySelector('.pv-brand');
-        overlay.append(mark);if(brand)overlay.append(brand);
         this.panel.querySelectorAll('[data-tab]').forEach(control=>{
             const label=control.textContent.trim();
             control.setAttribute('aria-label',label);
@@ -67,7 +67,9 @@ export class UI {
         minimize.replaceChildren(outlineIcon('minimize'));
         const close=this.panel.querySelector('[data-action="close"]');
         close.onclick=()=>this.close();close.replaceChildren(outlineIcon('close'));
-        controls.append(minimize,close);head.append(overlay,controls);
+        controls.replaceChildren(minimize,close);
+        overlay.replaceChildren(mark,brand);
+        head.replaceChildren(overlay,controls);
         this.restoreDock=el('div',{id:'pensieve-restore-dock',hidden:'true'});
         const restore=iconButton('Омут памяти',()=>this.restore(),'fa-book-open');restore.setAttribute('aria-label','Восстановить Омут памяти');this.restoreDock.append(restore);
         this.restoreButton=restore;this.operationBanner=el('div',{class:'pv-operation-banner',role:'status',hidden:'true'});this.panel.querySelector('.pv-notice').before(this.operationBanner);
@@ -727,7 +729,7 @@ export class UI {
     memoryPlacementView(section,settings) {
         section.classList.add('pv-memory-placement');
         const modes=[
-            [-1,'Никуда — только макрос'],
+            [-1,'Никуда (только макрос)'],
             [2,'Перед основным промптом'],
             [0,'После основного промпта'],
             [1,'Внутри чата'],
